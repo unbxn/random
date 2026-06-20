@@ -66,11 +66,11 @@ def subheader(title):
 
 # ----------------------------- Helpers -----------------------------
 
-SUSPICIOUS_EXTENSIONS = {".exe", ".dll", ".scr", ".bat", ".cmd", ".ps1", ".vbs"}
+SUSPICIOUS_EXTENSIONS = {".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs"}
 
 # Heuristic thresholds
 RECENT_DAYS = 7
-MAX_LIST = 25
+MAX_LIST = 50
 
 
 def human_time(ts):

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+print()
 print("=" * 70)
 print(""" 
     ██╗  ██╗██╗██████╗  █████╗ ███╗   ██╗
@@ -336,7 +337,7 @@ def main():
     enable_windows_ansi()
     os.system("")  # also helps enable ANSI on some Windows terminals
 
-    print(c("\n  LOCAL SYSTEM INSPECTOR\n", Color.CYAN + Color.BOLD))
+    print(c("\n HIDAN SCRIPT PC CHECK\n", Color.CYAN + Color.BOLD))
     print_disclaimer()
     print()
 

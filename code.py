@@ -64,8 +64,8 @@ def subheader(title):
 SUSPICIOUS_EXTENSIONS = {".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs"}
 
 # Heuristic thresholds
-RECENT_DAYS = 7
-MAX_LIST = 50
+RECENT_DAYS = 14
+MAX_LIST = 250
 
 
 def human_time(ts):

@@ -1,21 +1,16 @@
 #!/usr/bin/env python3
-"""
-Local System Inspector
------------------------
-A stdlib-only diagnostic tool that runs ON THIS MACHINE to summarize:
-  1. Basic system info (OS, install date)
-  2. Temp / admin temp file counts
-  3. Recently downloaded files
-  4. Generic suspicious-file heuristics (unsigned-looking, hidden, recently
-     modified executables in odd locations)
-
-This is a self-audit tool. It does NOT identify specific cheat software by
-name/signature, does not modify or delete anything, and does not transmit
-data anywhere. It only reads file metadata on the local filesystem.
-
-Run with:  python scan.py
-No third-party packages required (stdlib only).
-"""
+print("=" * 70)
+print(""" 
+    ██╗  ██╗██╗██████╗  █████╗ ███╗   ██╗
+    ██║  ██║██║██╔══██╗██╔══██╗████╗  ██║
+    ███████║██║██║  ██║███████║██╔██╗ ██║
+    ██╔══██║██║██║  ██║██╔══██║██║╚██╗██║
+    ██║  ██║██║██████╔╝██║  ██║██║ ╚████║
+    ╚═╝  ╚═╝╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝
+    By Hidan scripts v1.0
+    
+""")
+print("=" * 70)
 
 import os
 import sys

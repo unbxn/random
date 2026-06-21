@@ -8,7 +8,7 @@ print("""
     ██╔══██║██║██║  ██║██╔══██║██║╚██╗██║
     ██║  ██║██║██████╔╝██║  ██║██║ ╚████║
     ╚═╝  ╚═╝╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝
-    By Hidan scripts v1.7
+    By Hidan scripts v1.8
 """)
 print("=" * 70)
 
@@ -202,7 +202,7 @@ def get_event_logs_windows():
         query_cmd = [
             "wevtutil", "qe", "Application",
             "/q:*[System[EventID=1000 or EventID=1001]]",
-            "/c:50", "/f:text", "/rd:true"
+            "/c:100", "/f:text", "/rd:true"  # Increased to 100 events
         ]
         
         result = subprocess.run(
@@ -217,7 +217,7 @@ def get_event_logs_windows():
             # Try alternative method using PowerShell
             ps_cmd = [
                 "powershell", "-Command",
-                "Get-WinEvent -LogName Application -FilterXPath \"*[System[EventID=1000 or EventID=1001]]\" -MaxEvents 50 | Select-Object TimeCreated, Message"
+                "Get-WinEvent -LogName Application -FilterXPath \"*[System[EventID=1000 or EventID=1001]]\" -MaxEvents 100 | Select-Object TimeCreated, Message"
             ]
             
             result = subprocess.run(
@@ -256,7 +256,6 @@ def parse_event_logs_windows(text):
             if current_event:
                 events.append(current_event)
                 current_event = {}
-            current_event['event_id'] = 1000  # Will be updated
             continue
         
         # Extract important fields
@@ -270,23 +269,26 @@ def parse_event_logs_windows(text):
             if match:
                 current_event['time'] = match.group(1).strip()
         
-        if 'EventData' in line or 'Faulting application' in line:
-            # Extract faulting application info
-            app_match = re.search(r'Faulting application name\s*:\s*(.+?)(?:\r|\n|$)', line, re.IGNORECASE)
-            if app_match:
-                current_event['app_name'] = app_match.group(1).strip()
-            
-            app_path_match = re.search(r'Faulting application path\s*:\s*(.+?)(?:\r|\n|$)', line, re.IGNORECASE)
-            if app_path_match:
-                current_event['app_path'] = app_path_match.group(1).strip()
-            
-            fault_module = re.search(r'Faulting module name\s*:\s*(.+?)(?:\r|\n|$)', line, re.IGNORECASE)
-            if fault_module:
-                current_event['module'] = fault_module.group(1).strip()
-            
-            exception_code = re.search(r'Exception code\s*:\s*(.+?)(?:\r|\n|$)', line, re.IGNORECASE)
-            if exception_code:
-                current_event['exception'] = exception_code.group(1).strip()
+        # Extract faulting application details
+        if 'Faulting application name' in line:
+            match = re.search(r'Faulting application name\s*:\s*(.+?)(?:\r|\n|$)', line, re.IGNORECASE)
+            if match:
+                current_event['app_name'] = match.group(1).strip()
+        
+        if 'Faulting application path' in line:
+            match = re.search(r'Faulting application path\s*:\s*(.+?)(?:\r|\n|$)', line, re.IGNORECASE)
+            if match:
+                current_event['app_path'] = match.group(1).strip()
+        
+        if 'Faulting module name' in line:
+            match = re.search(r'Faulting module name\s*:\s*(.+?)(?:\r|\n|$)', line, re.IGNORECASE)
+            if match:
+                current_event['module'] = match.group(1).strip()
+        
+        if 'Exception code' in line:
+            match = re.search(r'Exception code\s*:\s*(.+?)(?:\r|\n|$)', line, re.IGNORECASE)
+            if match:
+                current_event['exception'] = match.group(1).strip()
     
     if current_event:
         events.append(current_event)
@@ -317,7 +319,7 @@ def parse_event_logs_ps(text):
             if not message or message.startswith('--------'):
                 continue
                 
-            # Parse message for details
+            # Parse message for details - look for specific fields
             app_match = re.search(r'Faulting application name:\s*(.+?)(?:\r|\n|$)', message, re.IGNORECASE)
             if app_match:
                 current_event['app_name'] = app_match.group(1).strip()
@@ -325,6 +327,14 @@ def parse_event_logs_ps(text):
             app_path_match = re.search(r'Faulting application path:\s*(.+?)(?:\r|\n|$)', message, re.IGNORECASE)
             if app_path_match:
                 current_event['app_path'] = app_path_match.group(1).strip()
+            
+            module_match = re.search(r'Faulting module name:\s*(.+?)(?:\r|\n|$)', message, re.IGNORECASE)
+            if module_match:
+                current_event['module'] = module_match.group(1).strip()
+            
+            exception_match = re.search(r'Exception code:\s*(.+?)(?:\r|\n|$)', message, re.IGNORECASE)
+            if exception_match:
+                current_event['exception'] = exception_match.group(1).strip()
             
             # Extract event ID from message or set default
             event_id_match = re.search(r'Event ID:\s*(\d+)', message, re.IGNORECASE)
@@ -360,10 +370,43 @@ def print_event_logs(events):
     events = get_event_logs_windows()
     
     if not events:
-        print(c("No Event ID 1000 or 1001 events found in the last 50 records.", Color.GREEN))
+        print(c("No Event ID 1000 or 1001 events found in the last 100 records.", Color.GREEN))
         return [], []
     
-    # Filter for suspicious applications
+    # Display ALL events with their full details
+    print(c(f"\nFound {len(events)} events with Event IDs 1000 or 1001:", Color.CYAN + Color.BOLD))
+    
+    for idx, event in enumerate(events, 1):
+        print()
+        print(c(f"[{idx}/{len(events)}] {c('EVENT LOG', Color.YELLOW)}", Color.WHITE + Color.BOLD))
+        
+        if 'time' in event:
+            print(c(f"  Time: {event['time']}", Color.YELLOW))
+        if 'event_id' in event:
+            print(c(f"  Event ID: {event['event_id']}", Color.YELLOW))
+        if 'app_name' in event:
+            print(c(f"  Faulting application name: {event['app_name']}", Color.WHITE))
+        if 'app_path' in event:
+            print(c(f"  Faulting application path: {event['app_path']}", Color.GRAY))
+        if 'module' in event:
+            print(c(f"  Faulting module: {event['module']}", Color.GRAY))
+        if 'exception' in event:
+            print(c(f"  Exception code: {event['exception']}", Color.RED))
+        
+        # Check for suspicious applications
+        suspicious_keywords = [
+            'cheat', 'hack', 'inject', 'mod', 'crack', 'keygen', 'loader', 'bot',
+            'macro', 'script', 'exploit', 'trainer', 'overlay', 'radar', 'esp',
+            'aimbot', 'triggerbot', 'wallhack', 'bypass', 'memory', 'spoof'
+        ]
+        
+        if 'app_name' in event:
+            app_name_lower = event['app_name'].lower()
+            matched = [kw for kw in suspicious_keywords if kw in app_name_lower]
+            if matched:
+                print(c(f"  ⚠️  Suspicious keywords found: {', '.join(matched)}", Color.RED))
+    
+    # Filter for suspicious applications for return
     suspicious_events = []
     suspicious_keywords = [
         'cheat', 'hack', 'inject', 'mod', 'crack', 'keygen', 'loader', 'bot',
@@ -372,7 +415,6 @@ def print_event_logs(events):
     ]
     
     for event in events:
-        # Check if event contains suspicious keywords
         event_text = str(event).lower()
         is_suspicious = False
         matched_keywords = []
@@ -386,32 +428,7 @@ def print_event_logs(events):
             suspicious_events.append((event, matched_keywords))
     
     if suspicious_events:
-        print(c(f"\nFound {len(suspicious_events)} suspicious application error events:", Color.RED + Color.BOLD))
-        
-        for idx, (event, keywords) in enumerate(suspicious_events, 1):
-            print()
-            print(c(f"[{idx}/{len(suspicious_events)}] {c('EVENT LOG FLAG', Color.RED)}", Color.WHITE + Color.BOLD))
-            
-            if 'time' in event:
-                print(c(f"  Time: {event['time']}", Color.YELLOW))
-            if 'event_id' in event:
-                print(c(f"  Event ID: {event['event_id']}", Color.YELLOW))
-            if 'app_name' in event:
-                print(c(f"  Faulting Application: {event['app_name']}", Color.WHITE))
-            if 'app_path' in event:
-                print(c(f"  Application Path: {event['app_path']}", Color.GRAY))
-            if 'module' in event:
-                print(c(f"  Faulting Module: {event['module']}", Color.GRAY))
-            if 'exception' in event:
-                print(c(f"  Exception Code: {event['exception']}", Color.RED))
-            
-            print(c(f"  Matched Keywords: {', '.join(keywords)}", Color.RED))
-            
-            if 'message' in event:
-                print(c(f"  Message: {event['message'][:200]}...", Color.GRAY))
-    
-    else:
-        print(c("No suspicious keywords found in event logs.", Color.GREEN))
+        print(c(f"\nFound {len(suspicious_events)} suspicious events:", Color.RED + Color.BOLD))
     
     return suspicious_events, [event.get('app_name', '') for event, _ in suspicious_events]
 
@@ -546,7 +563,7 @@ def scan_deleted_file_traces():
     return traces_found
 
 
-# ----------------------------- Original Functions (slightly modified) -----------------------------
+# ----------------------------- Modified Functions -----------------------------
 
 def human_time(ts):
     try:
@@ -698,14 +715,72 @@ def get_temp_dirs():
 
 def print_temp_summary():
     subheader("TEMPORARY / ADMIN TEMP FILES")
-    total = 0
+    
     for label, path in get_temp_dirs():
-        count = 0
-        for _ in safe_walk(path, max_depth=3):
-            count += 1
-        total += count
-        print(c(f"{label} ({path}): {count} files", Color.WHITE))
-    print(c(f"Total temp files found: {total}", Color.WHITE + Color.BOLD))
+        flagged_files = []
+        total_count = 0
+        
+        print(c(f"\nScanning {label} ({path}):", Color.CYAN))
+        
+        for f in safe_walk(path, max_depth=3):
+            if not f.is_file():
+                continue
+            total_count += 1
+            
+            # Check for flags
+            reasons = []
+            ext = f.suffix.lower()
+            path_str = str(f).lower()
+            
+            # Check for executable/script files
+            if ext in (".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs"):
+                # Check for suspicious patterns
+                if "temp" in path_str or "tmp" in path_str:
+                    reasons.append("Executable/script in temp location")
+                
+                # Check for recent modification
+                try:
+                    st = f.stat()
+                    recent_time = time.time() - (RECENT_DAYS * 86400)
+                    if st.st_mtime >= recent_time:
+                        reasons.append(f"Modified within last {RECENT_DAYS} days")
+                except:
+                    pass
+                
+                # Check for double extensions
+                if f.name.lower().count(".") >= 2 and ext == ".exe":
+                    stem_parts = f.name.lower().split(".")
+                    if len(stem_parts) >= 3 and stem_parts[-2] in (
+                        "pdf", "jpg", "png", "doc", "docx", "txt", "mp3", "mp4",
+                        "zip", "rar", "7z", "avi", "mkv", "mpg", "mpeg"
+                    ):
+                        reasons.append("Double file extension (disguise pattern)")
+                
+                # Check for common suspicious names
+                suspicious_names = ["cheat", "hack", "inject", "mod", "crack", "keygen", "loader"]
+                if any(name in f.name.lower() for name in suspicious_names):
+                    reasons.append(f"Suspicious filename pattern")
+                
+                if reasons:
+                    flagged_files.append((f, reasons))
+        
+        if flagged_files:
+            print(c(f"  Found {len(flagged_files)} suspicious files in {label}:", Color.RED + Color.BOLD))
+            for f, reasons in flagged_files[:10]:
+                print(c(f"    ⚠️  {f.name}", Color.RED))
+                try:
+                    st = f.stat()
+                    print(c(f"       Path: {f}", Color.GRAY))
+                    print(c(f"       Modified: {human_time(st.st_mtime)}  Size: {st.st_size/1024:.1f} KB", Color.YELLOW))
+                except:
+                    pass
+                for reason in reasons:
+                    print(c(f"       {reason}", Color.RED))
+            
+            if len(flagged_files) > 10:
+                print(c(f"    ... and {len(flagged_files) - 10} more flagged files", Color.GRAY))
+        else:
+            print(c(f"  No suspicious files found in {label}", Color.GREEN))
 
 
 def get_downloads_dir():
@@ -720,27 +795,86 @@ def get_downloads_dir():
 def print_downloads_summary():
     subheader("DOWNLOADED FILES")
     all_files = []
+    flagged_files = []
+    zip_files = []
+    
     for d in get_downloads_dir():
         for f in safe_walk(d, max_depth=4):
             if f.is_file():
                 all_files.append(f)
+                
+                ext = f.suffix.lower()
+                path_str = str(f).lower()
+                
+                # Collect all ZIP files
+                if ext == ".zip":
+                    zip_files.append(f)
+                
+                # Check for executable files with flags
+                if ext in (".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs"):
+                    reasons = []
+                    
+                    # Check for suspicious patterns
+                    suspicious_names = ["cheat", "hack", "inject", "mod", "crack", "keygen", "loader", "bot"]
+                    if any(name in f.name.lower() for name in suspicious_names):
+                        reasons.append(f"Suspicious filename pattern")
+                    
+                    # Check for double extensions
+                    if f.name.lower().count(".") >= 2 and ext == ".exe":
+                        stem_parts = f.name.lower().split(".")
+                        if len(stem_parts) >= 3 and stem_parts[-2] in (
+                            "pdf", "jpg", "png", "doc", "docx", "txt", "mp3", "mp4",
+                            "zip", "rar", "7z", "avi", "mkv", "mpg", "mpeg"
+                        ):
+                            reasons.append("Double file extension (disguise pattern)")
+                    
+                    # Check for recent modification
+                    try:
+                        st = f.stat()
+                        recent_time = time.time() - (RECENT_DAYS * 86400)
+                        if st.st_mtime >= recent_time:
+                            reasons.append(f"Modified within last {RECENT_DAYS} days")
+                    except:
+                        pass
+                    
+                    if reasons:
+                        flagged_files.append((f, reasons))
 
-    print(c(f"Downloads folder file count: {len(all_files)}", Color.WHITE))
-
-    if not all_files:
-        print(c("(No downloads folder found or it is empty)", Color.GRAY))
-        return all_files
-
-    all_files.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
-    print(c(f"Most recent {min(MAX_LIST, len(all_files))} downloaded files:", Color.WHITE))
-    for f in all_files[:MAX_LIST]:
-        try:
-            mtime = human_time(f.stat().st_mtime)
-            size_kb = f.stat().st_size / 1024
-            print(c(f"  [{mtime}] {f.name}  ({size_kb:.1f} KB)", Color.YELLOW))
-        except Exception:
-            continue
-
+    print(c(f"\nDownloads folder total file count: {len(all_files)}", Color.WHITE))
+    
+    # Display ZIP files
+    if zip_files:
+        print(c(f"\nZIP files found ({len(zip_files)}):", Color.CYAN + Color.BOLD))
+        for f in zip_files[:20]:
+            try:
+                st = f.stat()
+                print(c(f"  📦 {f.name} ({st.st_size/1024:.1f} KB)", Color.WHITE))
+                print(c(f"     Modified: {human_time(st.st_mtime)}", Color.GRAY))
+            except:
+                print(c(f"  📦 {f.name}", Color.WHITE))
+        if len(zip_files) > 20:
+            print(c(f"  ... and {len(zip_files) - 20} more ZIP files", Color.GRAY))
+    else:
+        print(c("No ZIP files found in downloads.", Color.GREEN))
+    
+    # Display flagged executable files
+    if flagged_files:
+        print(c(f"\n⚠️  Flagged executable/script files found ({len(flagged_files)}):", Color.RED + Color.BOLD))
+        for f, reasons in flagged_files[:20]:
+            print(c(f"  ⚠️  {f.name}", Color.RED))
+            try:
+                st = f.stat()
+                print(c(f"     Path: {f}", Color.GRAY))
+                print(c(f"     Modified: {human_time(st.st_mtime)}  Size: {st.st_size/1024:.1f} KB", Color.YELLOW))
+            except:
+                pass
+            for reason in reasons:
+                print(c(f"     {reason}", Color.RED))
+        if len(flagged_files) > 20:
+            print(c(f"  ... and {len(flagged_files) - 20} more flagged files", Color.GRAY))
+    else:
+        print(c("No suspicious executable files found in downloads.", Color.GREEN))
+    
     return all_files
 
 
@@ -900,7 +1034,7 @@ def main():
     enable_windows_ansi()
     os.system("")
 
-    print(c("\n HIDAN SCRIPT FULL SYSTEM SCANNER v1.7\n", Color.CYAN + Color.BOLD))
+    print(c("\n HIDAN SCRIPT FULL SYSTEM SCANNER v1.8\n", Color.CYAN + Color.BOLD))
     print_disclaimer()
     print()
 

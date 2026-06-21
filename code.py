@@ -64,8 +64,8 @@ def subheader(title):
 
 # ----------------------------- Helpers -----------------------------
 
-SUSPICIOUS_EXTENSIONS = {".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs", ".dll", ".msi"}
-EXECUTABLE_EXTENSIONS = {".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs", ".com", ".pif", ".gadget", ".msi", ".dll"}
+SUSPICIOUS_EXTENSIONS = {".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs", ".msi"}
+EXECUTABLE_EXTENSIONS = {".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs", ".com", ".pif", ".gadget", ".msi"}
 
 # Heuristic thresholds
 RECENT_DAYS = 14

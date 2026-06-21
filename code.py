@@ -8,7 +8,7 @@ print("""
     ██╔══██║██║██║  ██║██╔══██║██║╚██╗██║
     ██║  ██║██║██████╔╝██║  ██║██║ ╚████║
     ╚═╝  ╚═╝╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝
-    By Hidan scripts v1.7 - Enhanced Forensic Edition
+    By Hidan scripts v1.7
 """)
 print("=" * 70)
 
@@ -18,9 +18,10 @@ import platform
 import subprocess
 import time
 import datetime
-from pathlib import Path
 import re
 import glob
+from pathlib import Path
+from collections import defaultdict
 
 # ----------------------------- Color handling -----------------------------
 
@@ -72,6 +73,480 @@ RECENT_DAYS = 14
 MAX_LIST = 250
 MAX_DEPTH = 8
 
+# ----------------------------- NEW: Prefetch Analysis -----------------------------
+
+def get_prefetch_files_windows():
+    """Retrieve and analyze Windows prefetch files for suspicious patterns."""
+    prefetch_flags = []
+    
+    if platform.system() != "Windows":
+        return prefetch_flags
+    
+    prefetch_paths = [
+        r"C:\Windows\Prefetch",
+        r"C:\Windows\System32\Prefetch"
+    ]
+    
+    for prefetch_path in prefetch_paths:
+        if not Path(prefetch_path).exists():
+            continue
+            
+        try:
+            for pf_file in Path(prefetch_path).glob("*.pf"):
+                try:
+                    # Get file info
+                    st = pf_file.stat()
+                    file_size = st.st_size / 1024  # KB
+                    mtime = st.st_mtime
+                    
+                    # Parse filename for application info
+                    app_name = pf_file.stem
+                    
+                    # Look for suspicious indicators
+                    flags = []
+                    
+                    # Check for suspicious application names
+                    suspicious_apps = [
+                        "cheat", "hack", "injector", "wallhack", "aimbot", 
+                        "triggerbot", "esp", "radar", "overlay", "mod", 
+                        "bypass", "crack", "keygen", "loader", "inject",
+                        "memory", "dump", "spoof", "fake", "steam", "epic",
+                        "easyanticheat", "battleye", "gameguard", "punkbuster"
+                    ]
+                    
+                    for susp in suspicious_apps:
+                        if susp in app_name.lower():
+                            flags.append(f"Contains keyword '{susp}'")
+                            break
+                    
+                    # Check for unusually large prefetch files
+                    if file_size > 100:  # Normal prefetch files are usually < 100KB
+                        flags.append(f"Large file size: {file_size:.1f} KB")
+                    
+                    # Check for recent modification
+                    recent_time = time.time() - (RECENT_DAYS * 86400)
+                    if mtime >= recent_time:
+                        flags.append(f"Modified within last {RECENT_DAYS} days")
+                    
+                    # Check for applications in unusual locations (from prefetch traces)
+                    if "temp" in app_name.lower() or "download" in app_name.lower():
+                        flags.append("Application appears to be from temp/download location")
+                    
+                    if flags:
+                        prefetch_flags.append({
+                            'file': pf_file,
+                            'name': app_name,
+                            'size': file_size,
+                            'mtime': mtime,
+                            'flags': flags
+                        })
+                        
+                except Exception as e:
+                    # Skip individual files that cause errors
+                    continue
+                    
+        except Exception as e:
+            # Skip entire prefetch directory if error
+            continue
+    
+    return prefetch_flags
+
+
+def analyze_prefetch_details():
+    """Enhanced prefetch analysis with detailed information."""
+    subheader("PREFETCH ANALYSIS")
+    
+    if platform.system() != "Windows":
+        print(c("Prefetch analysis is only available on Windows systems.", Color.GRAY))
+        return [], []
+    
+    print(c("Scanning Windows Prefetch directory for suspicious traces...", Color.CYAN))
+    
+    prefetch_flags = get_prefetch_files_windows()
+    
+    if not prefetch_flags:
+        print(c("No suspicious prefetch entries found.", Color.GREEN))
+        return [], []
+    
+    print(c(f"\nFound {len(prefetch_flags)} suspicious prefetch entries:", Color.RED + Color.BOLD))
+    
+    # Sort by recent modification
+    prefetch_flags.sort(key=lambda x: x['mtime'], reverse=True)
+    
+    for idx, entry in enumerate(prefetch_flags, 1):
+        print()
+        print(c(f"[{idx}/{len(prefetch_flags)}] {c('PREFETCH FLAG', Color.RED)}", Color.WHITE + Color.BOLD))
+        print(c(f"  Application: {entry['name']}", Color.WHITE))
+        print(c(f"  Path: {entry['file']}", Color.GRAY))
+        print(c(f"  Size: {entry['size']:.1f} KB", Color.YELLOW))
+        print(c(f"  Modified: {human_time(entry['mtime'])}", Color.YELLOW))
+        
+        for flag in entry['flags']:
+            print(c(f"  ⚠️  {flag}", Color.RED))
+    
+    return prefetch_flags, [entry['name'] for entry in prefetch_flags]
+
+
+# ----------------------------- NEW: Event Viewer Logs (IDs 1000 and 1001) -----------------------------
+
+def get_event_logs_windows():
+    """Query Windows Event Logs for application errors (IDs 1000 and 1001)."""
+    event_logs = []
+    
+    if platform.system() != "Windows":
+        return event_logs
+    
+    try:
+        # Query for Event ID 1000 and 1001 from Application log
+        # Using wevtutil for reliable event log queries
+        query_cmd = [
+            "wevtutil", "qe", "Application",
+            "/q:*[System[EventID=1000 or EventID=1001]]",
+            "/c:50", "/f:text", "/rd:true"
+        ]
+        
+        result = subprocess.run(
+            query_cmd,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode != 0:
+            print(c("  Warning: Could not query event logs with wevtutil.", Color.YELLOW))
+            # Try alternative method using PowerShell
+            ps_cmd = [
+                "powershell", "-Command",
+                "Get-WinEvent -LogName Application -FilterXPath \"*[System[EventID=1000 or EventID=1001]]\" -MaxEvents 50 | Select-Object TimeCreated, Message"
+            ]
+            
+            result = subprocess.run(
+                ps_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode == 0 and result.stdout:
+                event_logs = parse_event_logs_ps(result.stdout)
+        
+        else:
+            event_logs = parse_event_logs_windows(result.stdout)
+            
+    except Exception as e:
+        print(c(f"  Error querying event logs: {str(e)}", Color.RED))
+    
+    return event_logs
+
+
+def parse_event_logs_windows(text):
+    """Parse wevtutil output for event log details."""
+    events = []
+    current_event = {}
+    
+    lines = text.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+            
+        # Detect event boundaries (Event[0], Event[1], etc.)
+        if line.startswith('Event['):
+            if current_event:
+                events.append(current_event)
+                current_event = {}
+            current_event['event_id'] = 1000  # Will be updated
+            continue
+        
+        # Extract important fields
+        if 'EventID' in line or 'Event ID' in line:
+            match = re.search(r'EventID?\s*:\s*(\d+)', line, re.IGNORECASE)
+            if match:
+                current_event['event_id'] = match.group(1)
+        
+        if 'TimeCreated' in line:
+            match = re.search(r'TimeCreated\s*:\s*(.+?)(?:\s*\[|$)', line)
+            if match:
+                current_event['time'] = match.group(1).strip()
+        
+        if 'EventData' in line or 'Faulting application' in line:
+            # Extract faulting application info
+            app_match = re.search(r'Faulting application name\s*:\s*(.+?)(?:\r|\n|$)', line, re.IGNORECASE)
+            if app_match:
+                current_event['app_name'] = app_match.group(1).strip()
+            
+            app_path_match = re.search(r'Faulting application path\s*:\s*(.+?)(?:\r|\n|$)', line, re.IGNORECASE)
+            if app_path_match:
+                current_event['app_path'] = app_path_match.group(1).strip()
+            
+            fault_module = re.search(r'Faulting module name\s*:\s*(.+?)(?:\r|\n|$)', line, re.IGNORECASE)
+            if fault_module:
+                current_event['module'] = fault_module.group(1).strip()
+            
+            exception_code = re.search(r'Exception code\s*:\s*(.+?)(?:\r|\n|$)', line, re.IGNORECASE)
+            if exception_code:
+                current_event['exception'] = exception_code.group(1).strip()
+    
+    if current_event:
+        events.append(current_event)
+    
+    return events
+
+
+def parse_event_logs_ps(text):
+    """Parse PowerShell output for event log details."""
+    events = []
+    current_event = {}
+    
+    lines = text.split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        if 'TimeCreated' in line:
+            # Extract time
+            match = re.search(r'TimeCreated\s*:\s*(.+?)$', line)
+            if match:
+                current_event['time'] = match.group(1).strip()
+        
+        if 'Message' in line:
+            message = line.replace('Message :', '').strip()
+            if not message or message.startswith('--------'):
+                continue
+                
+            # Parse message for details
+            app_match = re.search(r'Faulting application name:\s*(.+?)(?:\r|\n|$)', message, re.IGNORECASE)
+            if app_match:
+                current_event['app_name'] = app_match.group(1).strip()
+            
+            app_path_match = re.search(r'Faulting application path:\s*(.+?)(?:\r|\n|$)', message, re.IGNORECASE)
+            if app_path_match:
+                current_event['app_path'] = app_path_match.group(1).strip()
+            
+            # Extract event ID from message or set default
+            event_id_match = re.search(r'Event ID:\s*(\d+)', message, re.IGNORECASE)
+            if event_id_match:
+                current_event['event_id'] = event_id_match.group(1)
+            else:
+                # Determine from message content
+                if '1000' in message or 'appcrash' in message.lower():
+                    current_event['event_id'] = '1000'
+                elif '1001' in message or 'apphang' in message.lower():
+                    current_event['event_id'] = '1001'
+            
+            current_event['message'] = message
+            
+            # If we have an event with details, add it and reset
+            if current_event:
+                events.append(current_event)
+                current_event = {}
+    
+    return events
+
+
+def print_event_logs(events):
+    """Display event log findings."""
+    subheader("EVENT VIEWER LOGS (IDs 1000 and 1001)")
+    
+    if platform.system() != "Windows":
+        print(c("Event Viewer analysis is only available on Windows systems.", Color.GRAY))
+        return [], []
+    
+    print(c("Querying Application Event Log for Event IDs 1000 and 1001...", Color.CYAN))
+    
+    events = get_event_logs_windows()
+    
+    if not events:
+        print(c("No Event ID 1000 or 1001 events found in the last 50 records.", Color.GREEN))
+        return [], []
+    
+    # Filter for suspicious applications
+    suspicious_events = []
+    suspicious_keywords = [
+        'cheat', 'hack', 'inject', 'mod', 'crack', 'keygen', 'loader', 'bot',
+        'macro', 'script', 'exploit', 'trainer', 'overlay', 'radar', 'esp',
+        'aimbot', 'triggerbot', 'wallhack', 'bypass', 'memory', 'spoof'
+    ]
+    
+    for event in events:
+        # Check if event contains suspicious keywords
+        event_text = str(event).lower()
+        is_suspicious = False
+        matched_keywords = []
+        
+        for keyword in suspicious_keywords:
+            if keyword in event_text:
+                is_suspicious = True
+                matched_keywords.append(keyword)
+        
+        if is_suspicious:
+            suspicious_events.append((event, matched_keywords))
+    
+    if suspicious_events:
+        print(c(f"\nFound {len(suspicious_events)} suspicious application error events:", Color.RED + Color.BOLD))
+        
+        for idx, (event, keywords) in enumerate(suspicious_events, 1):
+            print()
+            print(c(f"[{idx}/{len(suspicious_events)}] {c('EVENT LOG FLAG', Color.RED)}", Color.WHITE + Color.BOLD))
+            
+            if 'time' in event:
+                print(c(f"  Time: {event['time']}", Color.YELLOW))
+            if 'event_id' in event:
+                print(c(f"  Event ID: {event['event_id']}", Color.YELLOW))
+            if 'app_name' in event:
+                print(c(f"  Faulting Application: {event['app_name']}", Color.WHITE))
+            if 'app_path' in event:
+                print(c(f"  Application Path: {event['app_path']}", Color.GRAY))
+            if 'module' in event:
+                print(c(f"  Faulting Module: {event['module']}", Color.GRAY))
+            if 'exception' in event:
+                print(c(f"  Exception Code: {event['exception']}", Color.RED))
+            
+            print(c(f"  Matched Keywords: {', '.join(keywords)}", Color.RED))
+            
+            if 'message' in event:
+                print(c(f"  Message: {event['message'][:200]}...", Color.GRAY))
+    
+    else:
+        print(c("No suspicious keywords found in event logs.", Color.GREEN))
+    
+    return suspicious_events, [event.get('app_name', '') for event, _ in suspicious_events]
+
+
+# ----------------------------- NEW: Deleted File Traces -----------------------------
+
+def scan_deleted_file_traces():
+    """Scan for traces of deleted files through various methods."""
+    subheader("DELETED FILE TRACES")
+    
+    traces_found = []
+    trace_details = defaultdict(list)
+    
+    # Method 1: Check Recycle Bin / Trash
+    print(c("Checking Recycle Bin/Trash for recently deleted items...", Color.CYAN))
+    
+    if platform.system() == "Windows":
+        recycle_patterns = [
+            r"C:\$Recycle.bin\*",
+            r"C:\System Volume Information\*",
+            r"%SystemRoot%\Prefetch\*"  # Some deleted files leave prefetch traces
+        ]
+        
+        for pattern in recycle_patterns:
+            try:
+                expanded = os.path.expandvars(pattern)
+                matches = glob.glob(expanded, recursive=True)
+                
+                for path_str in matches[:20]:  # Limit to avoid too much output
+                    path = Path(path_str)
+                    if path.is_file():
+                        try:
+                            st = path.stat()
+                            if time.time() - st.st_mtime <= (RECENT_DAYS * 86400):
+                                trace_details['Recycle Bin'].append({
+                                    'path': str(path),
+                                    'mtime': st.st_mtime,
+                                    'size': st.st_size
+                                })
+                        except:
+                            pass
+            except:
+                continue
+    
+    else:  # Linux/Mac
+        trash_paths = [
+            Path.home() / ".local/share/Trash",
+            Path.home() / ".trash",
+            "/tmp"
+        ]
+        
+        for trash in trash_paths:
+            if trash.exists():
+                for file_pattern in ["*", "*/"]:
+                    for item in trash.glob(f"**/{file_pattern}"):
+                        try:
+                            if item.is_file() and item.name != ".trashinfo":
+                                st = item.stat()
+                                if time.time() - st.st_mtime <= (RECENT_DAYS * 86400):
+                                    trace_details['Trash'].append({
+                                        'path': str(item),
+                                        'mtime': st.st_mtime,
+                                        'size': st.st_size
+                                    })
+                        except:
+                            continue
+    
+    # Method 2: Check for common trace files
+    trace_patterns = []
+    if platform.system() == "Windows":
+        trace_patterns = [
+            "%TEMP%\\*.tmp",
+            "%TEMP%\\*.log",
+            "C:\\Windows\\Temp\\*",
+            "%APPDATA%\\*\\*.tmp"
+        ]
+    else:
+        trace_patterns = [
+            "/tmp/*.tmp",
+            "/var/tmp/*.tmp",
+            "/var/log/*.tmp"
+        ]
+    
+    print(c("Checking for temporary file traces...", Color.CYAN))
+    
+    for pattern in trace_patterns:
+        try:
+            expanded = os.path.expandvars(pattern)
+            matches = glob.glob(expanded, recursive=False)
+            
+            for path_str in matches[:20]:
+                path = Path(path_str)
+                if path.is_file():
+                    try:
+                        st = path.stat()
+                        if time.time() - st.st_mtime <= (RECENT_DAYS * 86400):
+                            trace_details['Temporary Files'].append({
+                                'path': str(path),
+                                'mtime': st.st_mtime,
+                                'size': st.st_size
+                            })
+                    except:
+                        pass
+        except:
+            continue
+    
+    # Display results
+    total_traces = sum(len(items) for items in trace_details.values())
+    
+    if total_traces == 0:
+        print(c("No traces of recently deleted or temporary files found.", Color.GREEN))
+        return []
+    
+    print(c(f"\nFound {total_traces} file traces in recent {RECENT_DAYS} days:", Color.YELLOW))
+    
+    for category, items in trace_details.items():
+        if items:
+            print()
+            print(c(f"  [{category}] {len(items)} items:", Color.CYAN + Color.BOLD))
+            
+            for item in items[:10]:  # Show first 10 per category
+                size_kb = item.get('size', 0) / 1024
+                mtime_str = human_time(item.get('mtime', 0))
+                path_str = item.get('path', 'unknown')
+                
+                print(c(f"    - {path_str}", Color.WHITE))
+                print(c(f"      Modified: {mtime_str}  Size: {size_kb:.1f} KB", Color.GRAY))
+            
+            if len(items) > 10:
+                print(c(f"    ... and {len(items) - 10} more", Color.GRAY))
+    
+    return traces_found
+
+
+# ----------------------------- Original Functions (slightly modified) -----------------------------
 
 def human_time(ts):
     try:
@@ -146,16 +621,6 @@ def is_system_directory(path):
     return False
 
 
-def get_windows_drive():
-    """Get the Windows system drive."""
-    if platform.system() == "Windows":
-        windir = os.environ.get("WINDIR", "C:\\Windows")
-        return windir[:3]  # Returns "C:\\" or similar
-    return None
-
-
-# ----------------------------- Section 1: System Info -----------------------------
-
 def get_install_date_windows():
     try:
         result = subprocess.run(
@@ -216,8 +681,6 @@ def print_system_info():
     print(c(f"Drives to scan: {', '.join([str(d) for d in drives])}", Color.GREEN))
 
 
-# ----------------------------- Section 2: Temp files -----------------------------
-
 def get_temp_dirs():
     dirs = []
     if platform.system() == "Windows":
@@ -244,8 +707,6 @@ def print_temp_summary():
         print(c(f"{label} ({path}): {count} files", Color.WHITE))
     print(c(f"Total temp files found: {total}", Color.WHITE + Color.BOLD))
 
-
-# ----------------------------- Section 3: Downloaded files -----------------------------
 
 def get_downloads_dir():
     home = Path.home()
@@ -282,492 +743,6 @@ def print_downloads_summary():
 
     return all_files
 
-
-# ----------------------------- Section 4: PREFETCH ANALYSIS -----------------------------
-
-def scan_prefetch():
-    """Scan Windows Prefetch files for suspicious executables."""
-    subheader("PREFETCH FILE ANALYSIS")
-    
-    if platform.system() != "Windows":
-        print(c("Prefetch analysis is Windows-specific. Skipping.", Color.GRAY))
-        return []
-    
-    prefetch_dirs = []
-    windir = os.environ.get("WINDIR", "C:\\Windows")
-    
-    # Windows 10/11 prefetch location
-    prefetch_path = os.path.join(windir, "Prefetch")
-    if os.path.exists(prefetch_path):
-        prefetch_dirs.append(prefetch_path)
-    
-    # Also check for older Windows versions
-    prefetch_path_alt = os.path.join(windir, "system32", "Prefetch")
-    if os.path.exists(prefetch_path_alt):
-        prefetch_dirs.append(prefetch_path_alt)
-    
-    if not prefetch_dirs:
-        print(c("No Prefetch directory found.", Color.GRAY))
-        return []
-    
-    print(c(f"Scanning Prefetch directories: {', '.join(prefetch_dirs)}", Color.WHITE))
-    
-    suspicious_prefetch = []
-    recent_cutoff = time.time() - (RECENT_DAYS * 86400)
-    
-    for prefetch_dir in prefetch_dirs:
-        try:
-            for pf_file in Path(prefetch_dir).glob("*.pf"):
-                try:
-                    st = pf_file.stat()
-                    mod_time = st.st_mtime
-                    
-                    # Check if prefetch file is recent
-                    if mod_time >= recent_cutoff:
-                        # Extract executable name from prefetch filename
-                        # Format: EXECUTABLE.EXE-XXXXXXXX.pf
-                        pf_name = pf_file.name
-                        exe_name = pf_name.split("-")[0] if "-" in pf_name else pf_name.replace(".pf", "")
-                        
-                        # Check for suspicious patterns
-                        reasons = []
-                        
-                        # Check if it's a suspicious extension
-                        ext = Path(exe_name).suffix.lower()
-                        if ext in SUSPICIOUS_EXTENSIONS:
-                            reasons.append(f"Suspicious extension: {ext}")
-                        
-                        # Check for common malware names or patterns
-                        suspicious_keywords = [
-                            'virus', 'malware', 'trojan', 'hack', 'keylog', 
-                            'spy', 'ransom', 'crypt', 'miner', 'rootkit',
-                            'inject', 'exploit', 'payload', 'worm'
-                        ]
-                        exe_lower = exe_name.lower()
-                        for keyword in suspicious_keywords:
-                            if keyword in exe_lower:
-                                reasons.append(f"Suspicious keyword in filename: '{keyword}'")
-                                break
-                        
-                        # Check for random-looking filenames (alphanumeric, no clear purpose)
-                        if re.match(r'^[a-zA-Z0-9]{8,}\.(exe|scr|bat|cmd)$', exe_name):
-                            reasons.append("Random-looking filename pattern")
-                        
-                        if reasons:
-                            suspicious_prefetch.append((pf_file, exe_name, mod_time, reasons))
-                            print(c(f"  ⚠️  FLAGGED: {pf_file.name} ({exe_name})", Color.RED))
-                            for reason in reasons:
-                                print(c(f"      -> {reason}", Color.YELLOW))
-                        else:
-                            # Still track but don't flag
-                            print(c(f"  ✅ {pf_file.name} ({exe_name})", Color.GREEN))
-                            
-                except Exception as e:
-                    print(c(f"  Error processing {pf_file}: {str(e)[:50]}", Color.GRAY))
-                    continue
-                    
-        except Exception as e:
-            print(c(f"Error scanning prefetch directory: {str(e)[:50]}", Color.GRAY))
-            continue
-    
-    print(c(f"\nPrefetch analysis complete. Found {len(suspicious_prefetch)} flagged files.", 
-            Color.CYAN if not suspicious_prefetch else Color.RED))
-    return suspicious_prefetch
-
-
-# ----------------------------- Section 5: EVENT VIEWER LOGS (Windows) -----------------------------
-
-def scan_event_logs():
-    """Scan Windows Event Logs for events 1000 and 1001 (application crashes/errors)."""
-    subheader("EVENT VIEWER LOG ANALYSIS")
-    
-    if platform.system() != "Windows":
-        print(c("Event log analysis is Windows-specific. Skipping.", Color.GRAY))
-        return []
-    
-    print(c("Scanning Windows Event Logs for events 1000 and 1001 (application crashes)...", Color.WHITE))
-    print(c("NOTE: This may take a moment.", Color.GRAY))
-    
-    suspicious_events = []
-    recent_cutoff = datetime.datetime.now() - datetime.timedelta(days=RECENT_DAYS)
-    recent_cutoff_str = recent_cutoff.strftime("%Y-%m-%d %H:%M:%S")
-    
-    try:
-        # Query Application log for events 1000 and 1001
-        for event_id in ["1000", "1001"]:
-            cmd = [
-                "wevtutil", "qe", "Application", 
-                "/q:", f"*[System[(EventID={event_id})]]", 
-                "/rd:true", "/c:20", "/f:text"
-            ]
-            
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=30
-            )
-            
-            if result.returncode != 0:
-                print(c(f"  Could not query event ID {event_id}: {result.stderr[:100]}", Color.GRAY))
-                continue
-            
-            # Parse the output
-            current_event = {}
-            lines = result.stdout.splitlines()
-            
-            for i, line in enumerate(lines):
-                if "Event[0]" in line or "Event[" in line:
-                    if current_event:
-                        # Process previous event
-                        process_event(current_event, suspicious_events, recent_cutoff_str)
-                    current_event = {}
-                elif line.strip():
-                    if ":" in line:
-                        key, value = line.split(":", 1)
-                        current_event[key.strip()] = value.strip()
-                    else:
-                        if "Data" in current_event:
-                            current_event["Data"] = current_event["Data"] + " " + line.strip()
-                        else:
-                            current_event["Data"] = line.strip()
-            
-            # Process last event
-            if current_event:
-                process_event(current_event, suspicious_events, recent_cutoff_str)
-                
-    except Exception as e:
-        print(c(f"Error scanning event logs: {str(e)[:100]}", Color.RED))
-    
-    # Also try using PowerShell as alternative
-    try:
-        ps_script = f'''
-        Get-WinEvent -FilterHashtable @{{LogName='Application'; ID=1000,1001; StartTime=(Get-Date).AddDays(-{RECENT_DAYS})}} | 
-        Select-Object TimeCreated, Id, LevelDisplayName, Message | 
-        ConvertTo-Json
-        '''
-        result = subprocess.run(
-            ["powershell", "-Command", ps_script],
-            capture_output=True, text=True, timeout=30
-        )
-        
-        if result.returncode == 0 and result.stdout.strip():
-            import json
-            try:
-                events_data = json.loads(result.stdout)
-                if isinstance(events_data, list):
-                    for evt in events_data:
-                        process_event_ps(evt, suspicious_events)
-                elif isinstance(events_data, dict):
-                    process_event_ps(events_data, suspicious_events)
-            except:
-                pass
-    except Exception as e:
-        pass
-    
-    print(c(f"\nEvent log analysis complete. Found {len(suspicious_events)} suspicious events.",
-            Color.CYAN if not suspicious_events else Color.RED))
-    return suspicious_events
-
-
-def process_event(event_data, suspicious_events, recent_cutoff_str):
-    """Process a parsed event log entry."""
-    try:
-        time_str = event_data.get("TimeCreated", "")
-        if not time_str:
-            return
-            
-        # Check if event is recent
-        try:
-            event_time = datetime.datetime.strptime(time_str[:19], "%Y-%m-%dT%H:%M:%S")
-            if event_time < datetime.datetime.strptime(recent_cutoff_str[:19], "%Y-%m-%d %H:%M:%S"):
-                return
-        except:
-            pass
-        
-        message = event_data.get("Message", "")
-        data = event_data.get("Data", "")
-        full_text = message + " " + data
-        
-        # Look for suspicious patterns
-        suspicious_patterns = [
-            (r'crash', 'Application crash detected'),
-            (r'fault', 'Fault reported'),
-            (r'error', 'Error event'),
-            (r'failed', 'Failure occurred'),
-            (r'exception', 'Exception thrown'),
-            (r'access violation', 'Access violation'),
-            (r'memory', 'Memory-related issue'),
-            (r'unexpected', 'Unexpected error'),
-            (r'trojan', 'Potential trojan mentioned'),
-            (r'virus', 'Potential virus mentioned'),
-            (r'malware', 'Potential malware mentioned'),
-            (r'injection', 'Code injection mentioned'),
-            (r'hack', 'Hacking-related term'),
-        ]
-        
-        reasons = []
-        for pattern, reason in suspicious_patterns:
-            if re.search(pattern, full_text, re.IGNORECASE):
-                reasons.append(reason)
-        
-        if reasons:
-            suspicious_events.append({
-                'event_id': event_data.get('EventID', 'Unknown'),
-                'time': time_str,
-                'message': full_text[:200],
-                'reasons': reasons
-            })
-            
-            print(c(f"  ⚠️  FLAGGED: Event ID {event_data.get('EventID', 'Unknown')} at {time_str}", Color.RED))
-            for reason in reasons:
-                print(c(f"      -> {reason}", Color.YELLOW))
-                
-    except Exception as e:
-        pass
-
-
-def process_event_ps(evt, suspicious_events):
-    """Process a PowerShell-queried event."""
-    try:
-        time_str = evt.get('TimeCreated', '')
-        if not time_str:
-            return
-            
-        event_id = evt.get('Id', '')
-        message = evt.get('Message', '')
-        
-        if not event_id or not message:
-            return
-        
-        # Check for suspicious patterns
-        suspicious_patterns = [
-            (r'crash', 'Application crash detected'),
-            (r'fault', 'Fault reported'),
-            (r'error', 'Error event'),
-            (r'failed', 'Failure occurred'),
-            (r'exception', 'Exception thrown'),
-            (r'access violation', 'Access violation'),
-            (r'memory', 'Memory-related issue'),
-            (r'unexpected', 'Unexpected error'),
-            (r'trojan', 'Potential trojan mentioned'),
-            (r'virus', 'Potential virus mentioned'),
-            (r'malware', 'Potential malware mentioned'),
-        ]
-        
-        reasons = []
-        for pattern, reason in suspicious_patterns:
-            if re.search(pattern, message, re.IGNORECASE):
-                reasons.append(reason)
-        
-        if reasons:
-            suspicious_events.append({
-                'event_id': event_id,
-                'time': time_str,
-                'message': message[:200],
-                'reasons': reasons
-            })
-            
-            print(c(f"  ⚠️  FLAGGED: Event ID {event_id} at {time_str}", Color.RED))
-            for reason in reasons:
-                print(c(f"      -> {reason}", Color.YELLOW))
-                
-    except Exception as e:
-        pass
-
-
-# ----------------------------- Section 6: DELETED FILES WITH TRACES -----------------------------
-
-def scan_deleted_file_traces():
-    """Scan for traces of deleted files (registry, shortcuts, prefetch, etc.)."""
-    subheader("DELETED FILE TRACE ANALYSIS")
-    
-    print(c("Scanning for traces of deleted files that may no longer exist...", Color.WHITE))
-    
-    deleted_traces = []
-    
-    # 1. Check Recent Documents / Recent Items
-    if platform.system() == "Windows":
-        recent_folders = [
-            Path(os.path.expandvars("%APPDATA%\\Microsoft\\Windows\\Recent")),
-            Path(os.path.expandvars("%USERPROFILE%\\Recent")),
-        ]
-        
-        for recent_folder in recent_folders:
-            if recent_folder.exists():
-                for lnk_file in recent_folder.glob("*.lnk"):
-                    try:
-                        # Check if the target still exists
-                        target = None
-                        try:
-                            # Parse shortcut using PowerShell
-                            ps_cmd = f'''
-                            $shell = New-Object -ComObject WScript.Shell
-                            $shortcut = $shell.CreateShortcut("{lnk_file}")
-                            $shortcut.TargetPath
-                            '''
-                            result = subprocess.run(
-                                ["powershell", "-Command", ps_cmd],
-                                capture_output=True, text=True, timeout=5
-                            )
-                            if result.returncode == 0 and result.stdout.strip():
-                                target = result.stdout.strip()
-                        except:
-                            pass
-                        
-                        if target and not Path(target).exists():
-                            # Deleted file trace found
-                            st = lnk_file.stat()
-                            mod_time = st.st_mtime
-                            recent_cutoff = time.time() - (RECENT_DAYS * 86400)
-                            
-                            if mod_time >= recent_cutoff:
-                                deleted_traces.append({
-                                    'type': 'Shortcut (lnk)',
-                                    'name': lnk_file.name,
-                                    'target': target,
-                                    'modified': mod_time,
-                                    'location': str(lnk_file.parent)
-                                })
-                                print(c(f"  ⚠️  FLAGGED: Deleted file shortcut: {target} -> {lnk_file.name}", Color.RED))
-                    except Exception as e:
-                        continue
-    
-    # 2. Check Prefetch for missing executables (only if not already scanned)
-    if platform.system() == "Windows":
-        windir = os.environ.get("WINDIR", "C:\\Windows")
-        prefetch_dir = Path(windir) / "Prefetch"
-        if prefetch_dir.exists():
-            for pf_file in prefetch_dir.glob("*.pf"):
-                try:
-                    pf_name = pf_file.name
-                    exe_name = pf_name.split("-")[0] if "-" in pf_name else pf_name.replace(".pf", "")
-                    
-                    # Check if the executable still exists in common locations
-                    found = False
-                    search_paths = [
-                        Path("C:\\Program Files"),
-                        Path("C:\\Program Files (x86)"),
-                        Path(os.environ.get("WINDIR", "C:\\Windows")),
-                        Path(os.environ.get("SYSTEMROOT", "C:\\Windows")),
-                    ]
-                    
-                    for search_path in search_paths:
-                        if search_path.exists():
-                            for match in search_path.rglob(exe_name):
-                                if match.is_file():
-                                    found = True
-                                    break
-                        if found:
-                            break
-                    
-                    if not found:
-                        # Prefetch exists but executable is missing
-                        st = pf_file.stat()
-                        mod_time = st.st_mtime
-                        recent_cutoff = time.time() - (RECENT_DAYS * 86400)
-                        
-                        if mod_time >= recent_cutoff:
-                            deleted_traces.append({
-                                'type': 'Prefetch (pf)',
-                                'name': pf_file.name,
-                                'target': exe_name,
-                                'modified': mod_time,
-                                'location': str(pf_file.parent)
-                            })
-                            print(c(f"  ⚠️  FLAGGED: Prefetch for missing executable: {exe_name} ({pf_file.name})", Color.RED))
-                except Exception as e:
-                    continue
-    
-    # 3. Check Windows Registry for installed programs that may have been deleted
-    if platform.system() == "Windows":
-        try:
-            reg_keys = [
-                r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-                r"HKLM\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
-                r"HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-            ]
-            
-            for reg_key in reg_keys:
-                try:
-                    result = subprocess.run(
-                        ["reg", "query", reg_key],
-                        capture_output=True, text=True, timeout=10
-                    )
-                    
-                    if result.returncode == 0:
-                        lines = result.stdout.splitlines()
-                        for line in lines:
-                            if line.strip() and not line.startswith("HKEY"):
-                                # Check for DisplayIcon or InstallLocation that might point to deleted files
-                                key_path = line.strip()
-                                try:
-                                    result2 = subprocess.run(
-                                        ["reg", "query", f"{reg_key}\\{key_path}", "/v", "DisplayIcon"],
-                                        capture_output=True, text=True, timeout=5
-                                    )
-                                    if result2.returncode == 0:
-                                        icon_path = result2.stdout.splitlines()
-                                        for icon_line in icon_path:
-                                            if "REG_SZ" in icon_line or "REG_EXPAND_SZ" in icon_line:
-                                                parts = icon_line.split()
-                                                if len(parts) >= 3:
-                                                    icon_file = parts[-1]
-                                                    if not Path(icon_file).exists():
-                                                        deleted_traces.append({
-                                                            'type': 'Registry Uninstall Entry',
-                                                            'name': key_path,
-                                                            'target': icon_file,
-                                                            'modified': 0,
-                                                            'location': f"{reg_key}\\{key_path}"
-                                                        })
-                                                        print(c(f"  ⚠️  FLAGGED: Uninstall entry with missing icon: {key_path} -> {icon_file}", Color.RED))
-                                except:
-                                    pass
-                except:
-                    continue
-        except:
-            pass
-    
-    # 4. Check for empty or corrupted directories that might indicate deleted files
-    try:
-        drives, _ = get_all_drives()
-        for drive in drives:
-            # Only scan root of each drive for known deletion markers
-            for root_dir in drive.glob("*"):
-                try:
-                    if root_dir.is_dir():
-                        # Check for empty directories that are suspicious
-                        try:
-                            contents = list(root_dir.glob("*"))
-                            if len(contents) == 0:
-                                # Empty directory, might be a leftover from deletion
-                                st = root_dir.stat()
-                                mod_time = st.st_mtime
-                                recent_cutoff = time.time() - (RECENT_DAYS * 86400)
-                                if mod_time >= recent_cutoff:
-                                    # Only flag if it's in a suspicious location
-                                    path_str = str(root_dir).lower()
-                                    suspicious_paths = ['temp', 'tmp', 'download', 'desktop', 'documents']
-                                    if any(p in path_str for p in suspicious_paths):
-                                        deleted_traces.append({
-                                            'type': 'Empty Directory',
-                                            'name': root_dir.name,
-                                            'target': str(root_dir),
-                                            'modified': mod_time,
-                                            'location': str(root_dir.parent)
-                                        })
-                                        print(c(f"  ⚠️  FLAGGED: Suspicious empty directory: {root_dir}", Color.RED))
-                        except:
-                            pass
-                except:
-                    continue
-    except:
-        pass
-    
-    print(c(f"\nDeleted file trace analysis complete. Found {len(deleted_traces)} traces.",
-            Color.CYAN if not deleted_traces else Color.RED))
-    return deleted_traces
-
-
-# ----------------------------- Section 7: Suspicious file heuristics (FULL SYSTEM SCAN) -----------------------------
 
 def scan_suspicious_full(downloaded_files):
     subheader("FULL SYSTEM SUSPICIOUS FILE SCAN")
@@ -884,7 +859,6 @@ def scan_suspicious_full(downloaded_files):
     if not flags:
         print(c("\nNo suspicious indicators found based on current heuristics.", Color.YELLOW))
     else:
-        # Sort by most recent first
         flags.sort(key=lambda x: x[2], reverse=True)
         
         print(c(f"\n{'='*70}", Color.RED))
@@ -892,13 +866,12 @@ def scan_suspicious_full(downloaded_files):
         print(c(f"{'='*70}", Color.RED))
         print()
         
-        # Display ALL flagged files with numbering
         for idx, (f, reasons, mtime, size) in enumerate(flags, 1):
             print(c(f"[{idx}/{len(flags)}] {c('FLAGGED', Color.RED)} {f}", Color.WHITE + Color.BOLD))
             print(c(f"          Modified: {human_time(mtime)}  Size: {size/1024:.1f} KB", Color.YELLOW))
             for r in reasons:
                 print(c(f"          ⚠️  {r}", Color.RED))
-            print()  # Empty line between files
+            print()
 
     print()
     print(c(f"Executable/script files scanned without flags: {len(notices)}", Color.YELLOW))
@@ -914,12 +887,11 @@ def scan_suspicious_full(downloaded_files):
 
 def print_disclaimer():
     print(c(
-        "NOTE: This enhanced scanner includes:\n"
-        "  • Prefetch analysis for suspicious executables\n"
-        "  • Event Viewer (1000 & 1001) analysis for application crashes\n"
-        "  • Deleted file trace detection (shortcuts, prefetch, registry)\n"
-        "  • Full system file heuristics (location, hidden, double extensions)\n"
-        "A flag does NOT confirm malware or cheat software. Always verify manually.",
+        "NOTE: This tool uses generic heuristics (location, hidden attribute,\n"
+        "recent modification, double extensions). A flag does NOT confirm malware\n"
+        "or cheat software -- it only means the file matches a pattern worth your\n"
+        "own review. Always verify manually before deleting anything.\n"
+        "This version includes enhanced Prefetch, Event Log, and deleted file trace analysis.",
         Color.GRAY
     ))
 
@@ -928,6 +900,7 @@ def main():
     enable_windows_ansi()
     os.system("")
 
+    print(c("\n HIDAN SCRIPT FULL SYSTEM SCANNER v1.7\n", Color.CYAN + Color.BOLD))
     print_disclaimer()
     print()
 
@@ -935,30 +908,34 @@ def main():
     print_temp_summary()
     downloaded = print_downloads_summary()
     
-    # Run all forensic scans
-    prefetch_flags = scan_prefetch()
-    event_flags = scan_event_logs()
-    deleted_traces = scan_deleted_file_traces()
-    file_flags = scan_suspicious_full(downloaded)
-
-    header("FINAL SUMMARY")
-    total_flags = len(prefetch_flags) + len(event_flags) + len(deleted_traces) + len(file_flags)
+    # NEW: Prefetch analysis
+    prefetch_entries, prefetch_apps = analyze_prefetch_details()
     
-    print(c("\nForensic Scan Results:", Color.CYAN + Color.BOLD))
-    print(c(f"  • Prefetch flags:    {len(prefetch_flags)}", Color.WHITE))
-    print(c(f"  • Event log flags:   {len(event_flags)}", Color.WHITE))
-    print(c(f"  • Deleted traces:    {len(deleted_traces)}", Color.WHITE))
-    print(c(f"  • File heuristics:   {len(file_flags)}", Color.WHITE))
-    print(c(f"  • Total flags:       {total_flags}", Color.WHITE + Color.BOLD))
+    # NEW: Event Viewer logs
+    suspicious_events, event_apps = print_event_logs([])
+    
+    # NEW: Deleted file traces
+    deleted_traces = scan_deleted_file_traces()
+    
+    # Original file scan
+    flags = scan_suspicious_full(downloaded)
+    
+    # Combined summary
+    header("FULL SCAN SUMMARY")
+    print("")
+    
+    total_flags = len(flags) + len(prefetch_entries) + len(suspicious_events)
     
     if total_flags > 0:
-        print("")
-        print(c("⚠️  REVIEW RECOMMENDED: Investigate flagged items above.", Color.RED + Color.BOLD))
+        print(c(f"TOTAL FLAGS FOUND: {total_flags}", Color.RED + Color.BOLD))
+        print(c(f"  - File scan flags: {len(flags)}", Color.YELLOW))
+        print(c(f"  - Prefetch flags: {len(prefetch_entries)}", Color.YELLOW))
+        print(c(f"  - Event log flags: {len(suspicious_events)}", Color.YELLOW))
+        print(c(f"  - Deleted file traces: {len(deleted_traces)}", Color.YELLOW))
     else:
-        print("")
-        print(c("✅ No significant flags raised. System appears clean by these heuristics.", Color.GREEN + Color.BOLD))
+        print(c("No flags raised. System looks clean by these heuristics.", Color.GREEN))
     
-    print(c("\nFull forensic scan complete.\n", Color.WHITE))
+    print(c("\nFull system scan complete.\n", Color.WHITE))
 
 
 if __name__ == "__main__":

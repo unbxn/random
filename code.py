@@ -25,10 +25,7 @@ from pathlib import Path
 class Color:
     WHITE = "\033[97m"
     RED = "\033[91m"
-    GREEN = "\033[92m"
     YELLOW = "\033[93m"
-    BLUE = "\033[94m"
-    MAGENTA = "\033[95m"
     CYAN = "\033[96m"
     GRAY = "\033[90m"
     BOLD = "\033[1m"
@@ -51,7 +48,7 @@ def c(text, color):
 
 
 def header(title):
-    line = "=" * 70
+    line = "=" * 60
     print(c(line, Color.CYAN))
     print(c(f" {title}", Color.CYAN + Color.BOLD))
     print(c(line, Color.CYAN))
@@ -64,8 +61,7 @@ def subheader(title):
 
 # ----------------------------- Helpers -----------------------------
 
-SUSPICIOUS_EXTENSIONS = {".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs", ".msi"}
-EXECUTABLE_EXTENSIONS = {".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs", ".com", ".pif", ".gadget", ".msi"}
+SUSPICIOUS_EXTENSIONS = {".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs"}
 
 # Heuristic thresholds
 RECENT_DAYS = 14
@@ -79,63 +75,18 @@ def human_time(ts):
         return "unknown"
 
 
-def safe_walk(root, max_depth=6):
+def safe_walk(root, max_depth=4):
     """Walk a directory tree with a depth limit, skipping errors silently."""
     root = Path(root)
     if not root.exists():
         return
     root_depth = len(root.parts)
-    try:
-        for dirpath, dirnames, filenames in os.walk(root, onerror=lambda e: None):
-            depth = len(Path(dirpath).parts) - root_depth
-            if depth >= max_depth:
-                dirnames[:] = []
-            for fname in filenames:
-                yield Path(dirpath) / fname
-    except Exception:
-        return
-
-
-def check_signature_windows(filepath):
-    """Check if a Windows executable is signed using signtool."""
-    try:
-        result = subprocess.run(
-            ["signtool", "verify", "/pa", "/v", str(filepath)],
-            capture_output=True, text=True, timeout=10
-        )
-        if "Successfully verified" in result.stdout:
-            return "Signed"
-        elif "SignTool Error" in result.stdout:
-            return "Not signed"
-        else:
-            return "Unknown"
-    except (subprocess.TimeoutExpired, FileNotFoundError):
-        # Try alternative method using PowerShell
-        try:
-            ps_cmd = f'Get-AuthenticodeSignature -FilePath "{filepath}" | Select-Object -ExpandProperty SignerCertificate'
-            result = subprocess.run(
-                ["powershell", "-Command", ps_cmd],
-                capture_output=True, text=True, timeout=10
-            )
-            if result.stdout.strip():
-                return "Signed"
-            else:
-                return "Not signed"
-        except Exception:
-            return "Unknown"
-    except Exception:
-        return "Unknown"
-
-
-def get_file_info(filepath):
-    """Get file information including size and modification time."""
-    try:
-        stat = filepath.stat()
-        size = stat.st_size
-        mtime = stat.st_mtime
-        return size, mtime
-    except Exception:
-        return 0, 0
+    for dirpath, dirnames, filenames in os.walk(root, onerror=lambda e: None):
+        depth = len(Path(dirpath).parts) - root_depth
+        if depth >= max_depth:
+            dirnames[:] = []
+        for fname in filenames:
+            yield Path(dirpath) / fname
 
 
 # ----------------------------- Section 1: System Info -----------------------------
@@ -211,10 +162,6 @@ def get_temp_dirs():
         windir = os.environ.get("WINDIR", r"C:\Windows")
         admin_temp = os.path.join(windir, "Temp")
         dirs.append(("Admin/System Temp", admin_temp))
-        # Also check AppData Local Temp
-        appdata = os.environ.get("LOCALAPPDATA", "")
-        if appdata:
-            dirs.append(("AppData Temp", os.path.join(appdata, "Temp")))
     else:
         dirs.append(("Temp", "/tmp"))
         dirs.append(("Var Tmp", "/var/tmp"))
@@ -226,7 +173,7 @@ def print_temp_summary():
     total = 0
     for label, path in get_temp_dirs():
         count = 0
-        for _ in safe_walk(path, max_depth=3):
+        for _ in safe_walk(path, max_depth=2):
             count += 1
         total += count
         print(c(f"{label} ({path}): {count} files", Color.WHITE))
@@ -238,10 +185,6 @@ def print_temp_summary():
 def get_downloads_dir():
     home = Path.home()
     candidates = [home / "Downloads"]
-    # Additional common download locations
-    if platform.system() == "Windows":
-        candidates.append(Path(os.environ.get("USERPROFILE", "")) / "Downloads")
-        candidates.append(Path(os.environ.get("USERPROFILE", "")) / "Desktop")
     return [p for p in candidates if p.exists()]
 
 
@@ -249,7 +192,7 @@ def print_downloads_summary():
     subheader("DOWNLOADED FILES")
     all_files = []
     for d in get_downloads_dir():
-        for f in safe_walk(d, max_depth=4):
+        for f in safe_walk(d, max_depth=3):
             if f.is_file():
                 all_files.append(f)
 
@@ -272,189 +215,119 @@ def print_downloads_summary():
     return all_files
 
 
-# ----------------------------- Section 4: Comprehensive Executable Scan -----------------------------
+# ----------------------------- Section 4: Suspicious file heuristics -----------------------------
 
-def scan_all_executables():
-    """Scan all executable files across common system locations, similar to the image."""
-    subheader("EXECUTABLE FILES TRACES")
-    
-    # Define scan locations
-    scan_locations = []
-    
-    if platform.system() == "Windows":
-        # Windows system locations
-        windir = os.environ.get("WINDIR", r"C:\Windows")
-        scan_locations.append(("System32", os.path.join(windir, "System32")))
-        scan_locations.append(("SysWOW64", os.path.join(windir, "SysWOW64")))
-        scan_locations.append(("Program Files", os.environ.get("ProgramFiles", r"C:\Program Files")))
-        scan_locations.append(("Program Files (x86)", os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")))
-        
-        # User locations
-        userprofile = os.environ.get("USERPROFILE", "")
-        scan_locations.append(("User Profile", userprofile))
-        scan_locations.append(("AppData Local", os.environ.get("LOCALAPPDATA", "")))
-        scan_locations.append(("AppData Roaming", os.environ.get("APPDATA", "")))
-        
-        # Common locations for 3rd party apps
-        scan_locations.append(("Downloads", os.path.join(userprofile, "Downloads")))
-        scan_locations.append(("Desktop", os.path.join(userprofile, "Desktop")))
-        scan_locations.append(("Documents", os.path.join(userprofile, "Documents")))
-        
-        # Additional common locations from the image
-        scan_locations.append(("Temp", os.environ.get("TEMP", "")))
-        scan_locations.append(("System Temp", os.path.join(windir, "Temp")))
-        
-        # Check other drives
-        for drive in ["D:", "E:", "F:"]:
-            if os.path.exists(drive):
-                scan_locations.append((f"Drive {drive}", drive))
-    else:
-        # Unix/Linux locations
-        scan_locations.append(("/usr/bin", "/usr/bin"))
-        scan_locations.append(("/usr/sbin", "/usr/sbin"))
-        scan_locations.append(("/usr/local/bin", "/usr/local/bin"))
-        scan_locations.append(("/bin", "/bin"))
-        scan_locations.append(("/sbin", "/sbin"))
-        scan_locations.append(("/opt", "/opt"))
-        scan_locations.append(("/home", "/home"))
-        scan_locations.append(("/tmp", "/tmp"))
-    
-    all_executables = []
-    all_flagged = []
-    all_unsigned = []
-    
-    print(c("Scanning common locations for executable files...", Color.GRAY))
-    print()
-    
-    # Scan each location
-    for label, location in scan_locations:
-        if not location or not os.path.exists(location):
-            continue
-            
-        count = 0
-        print(c(f"\n--- {label} ({location}) ---", Color.CYAN + Color.BOLD))
-        
-        try:
-            for filepath in safe_walk(location, max_depth=4):
-                if not filepath.is_file():
-                    continue
-                    
-                ext = filepath.suffix.lower()
-                if ext not in EXECUTABLE_EXTENSIONS:
-                    continue
-                    
-                try:
-                    size, mtime = get_file_info(filepath)
-                    mtime_str = human_time(mtime)
-                    size_mb = size / (1024 * 1024)
-                    
-                    # Get signature status if on Windows
-                    sig_status = "Unknown"
-                    if platform.system() == "Windows" and ext in {".exe", ".msi"}:
-                        sig_status = check_signature_windows(filepath)
-                    
-                    # Format output like the image
-                    file_info = {
-                        'path': str(filepath),
-                        'mtime': mtime_str,
-                        'size': size_mb,
-                        'signature': sig_status,
-                        'name': filepath.name,
-                        'ext': ext
-                    }
-                    all_executables.append(file_info)
-                    
-                    # Check for suspicious patterns
-                    flagged = False
-                    reasons = []
-                    
-                    # Check if unsigned
-                    if sig_status == "Not signed" and ext in {".exe"}:
-                        reasons.append("Not signed")
-                        flagged = True
-                    
-                    # Check if in temp directories
-                    path_lower = str(filepath).lower()
-                    if "temp" in path_lower and ext in {".exe", ".scr"}:
-                        reasons.append("In temp directory")
-                        flagged = True
-                    
-                    # Check if recently modified (last 14 days)
-                    now = time.time()
-                    if mtime >= (now - RECENT_DAYS * 86400):
-                        reasons.append("Recently modified")
-                        flagged = True
-                    
-                    # Check for double extensions
-                    if filepath.name.lower().count(".") >= 2 and ext == ".exe":
-                        stem_parts = filepath.name.lower().split(".")
-                        if len(stem_parts) >= 3 and stem_parts[-2] in (
-                            "pdf", "jpg", "png", "doc", "docx", "txt", "mp3", "mp4", "zip", "rar"
-                        ):
-                            reasons.append("Double extension")
-                            flagged = True
-                    
-                    if flagged:
-                        all_flagged.append((file_info, reasons))
-                    
-                    # Display the file in the format from the image
-                    if flagged:
-                        color = Color.RED
-                        status_marker = "⚠"
-                    elif sig_status == "Not signed":
-                        color = Color.YELLOW
-                        status_marker = "!"
-                    else:
-                        color = Color.WHITE
-                        status_marker = " "
-                    
-                    # Build display line like: "2026-06-21 08:56:49    path\to\file.exe    Not signed"
-                    display = f"  {mtime_str}    {filepath.name}    {sig_status}"
-                    
-                    if flagged:
-                        print(c(f"  {display}    [{', '.join(reasons)}]", Color.RED))
-                        count += 1
-                    elif sig_status == "Not signed":
-                        print(c(f"  {display}", Color.YELLOW))
-                        count += 1
-                    else:
-                        print(c(f"  {display}", Color.WHITE))
-                    
-                    # Limit output to avoid overwhelming
-                    if count >= 100:
-                        print(c(f"  ... (showing first 100 files from this location)", Color.GRAY))
-                        break
-                        
-                except Exception as e:
-                    continue
-                    
-        except Exception as e:
-            print(c(f"  Error scanning {location}: {e}", Color.RED))
-    
-    print()
-    print(c("=" * 70, Color.CYAN))
-    print(c(f"TOTAL EXECUTABLES FOUND: {len(all_executables)}", Color.WHITE + Color.BOLD))
-    print(c(f"FLAGGED FOR REVIEW: {len(all_flagged)}", Color.RED + Color.BOLD))
-    print(c("=" * 70, Color.CYAN))
-    
-    return all_executables, all_flagged
+def is_windows_signed_unverifiable():
+    """We don't shell out to signtool (not always present); this is a
+    placeholder that always returns 'unknown' so we never falsely claim
+    something is unsigned without real verification."""
+    return None
 
-
-# ----------------------------- Section 5: Suspicious file heuristics -----------------------------
 
 def scan_suspicious(downloaded_files):
-    """Original heuristic scan function - kept for compatibility but merged into comprehensive scan"""
-    # This is now part of scan_all_executables, but kept for backward compatibility
-    return []
+    subheader("SUSPICIOUS FILE TRACES (heuristic flags)")
+    flags = []
+    notices = []
+
+    scan_roots = []
+    for d in get_downloads_dir():
+        scan_roots.append(d)
+    for label, path in get_temp_dirs():
+        scan_roots.append(Path(path))
+
+    now = time.time()
+    recent_cutoff = now - (RECENT_DAYS * 86400)
+
+    seen = set()
+    for root in scan_roots:
+        for f in safe_walk(root, max_depth=3):
+            if not f.is_file():
+                continue
+            key = str(f.resolve()) if f.exists() else str(f)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            ext = f.suffix.lower()
+            if ext not in SUSPICIOUS_EXTENSIONS:
+                continue
+
+            try:
+                st = f.stat()
+            except Exception:
+                continue
+
+            reasons = []
+
+            # Heuristic 1: executable sitting directly in a temp directory
+            path_str = str(f).lower()
+            if "temp" in path_str and ext in (".exe", ".scr", ".dll"):
+                reasons.append("Executable located in a temp directory")
+
+            # Heuristic 2: hidden file (Unix dotfile, or Windows hidden attrib)
+            is_hidden = f.name.startswith(".")
+            if platform.system() == "Windows":
+                try:
+                    import ctypes
+                    attrs = ctypes.windll.kernel32.GetFileAttributesW(str(f))
+                    FILE_ATTRIBUTE_HIDDEN = 0x2
+                    if attrs != -1 and attrs & FILE_ATTRIBUTE_HIDDEN:
+                        is_hidden = True
+                except Exception:
+                    pass
+            if is_hidden:
+                reasons.append("File is hidden")
+
+            # Heuristic 3: recently modified (within RECENT_DAYS)
+            recently_modified = st.st_mtime >= recent_cutoff
+            if recently_modified and ext in (".exe", ".dll", ".scr"):
+                reasons.append(f"Executable modified within last {RECENT_DAYS} days")
+
+            # Heuristic 4: double extension trick e.g. "setup.pdf.exe"
+            if f.name.lower().count(".") >= 2 and ext == ".exe":
+                stem_parts = f.name.lower().split(".")
+                if len(stem_parts) >= 3 and stem_parts[-2] in (
+                    "pdf", "jpg", "png", "doc", "docx", "txt", "mp3", "mp4"
+                ):
+                    reasons.append("Double file extension (disguise pattern)")
+
+            # Heuristic 5: script files that auto-run in odd places (.bat/.vbs/.ps1 in temp)
+            if ext in (".bat", ".vbs", ".ps1", ".cmd") and "temp" in path_str:
+                reasons.append("Script file in temp directory (possible dropper/launcher)")
+
+            if reasons:
+                flags.append((f, reasons, st.st_mtime, st.st_size))
+            else:
+                notices.append(f)
+
+    if not flags:
+        print(c("No suspicious indicators found based on current heuristics.", Color.YELLOW))
+    else:
+        flags.sort(key=lambda x: x[2], reverse=True)
+        for f, reasons, mtime, size in flags:
+            print(c(f"[FLAGGED] {f}", Color.RED + Color.BOLD))
+            print(c(f"          Modified: {human_time(mtime)}  Size: {size/1024:.1f} KB", Color.RED))
+            for r in reasons:
+                print(c(f"          -> {r}", Color.RED))
+
+    print()
+    print(c(f"Executable/script files scanned without flags: {len(notices)}", Color.YELLOW))
+    if notices:
+        print(c("Sample (up to 10):", Color.YELLOW))
+        for f in notices[:10]:
+            print(c(f"  {f}", Color.YELLOW))
+
+    return flags
 
 
 # ----------------------------- Main -----------------------------
 
 def print_disclaimer():
     print(c(
-        "NOTE: This tool scans executable files across common system locations.\n"
-        "A flag does NOT confirm malware -- it only means the file matches a pattern\n"
-        "worth your own review. Always verify manually before deleting anything.",
+        "NOTE: This tool uses generic heuristics (location, hidden attribute,\n"
+        "recent modification, double extensions). A flag does NOT confirm malware\n"
+        "or cheat software -- it only means the file matches a pattern worth your\n"
+        "own review. Always verify manually before deleting anything.",
         Color.GRAY
     ))
 
@@ -470,19 +343,11 @@ def main():
     print_system_info()
     print_temp_summary()
     downloaded = print_downloads_summary()
-    
-    # Run the comprehensive executable scan
-    executables, flagged = scan_all_executables()
-    
-    # Also run the heuristic scan for comparison
-    # scan_suspicious(downloaded)
+    flags = scan_suspicious(downloaded)
 
     header("SUMMARY")
-    if flagged:
-        print(c(f"{len(flagged)} file(s) flagged for review.", Color.RED + Color.BOLD))
-        print(c("  - Check for unsigned executables", Color.YELLOW))
-        print(c("  - Check for executables in temp directories", Color.YELLOW))
-        print(c("  - Check for recently modified suspicious files", Color.YELLOW))
+    if flags:
+        print(c(f"{len(flags)} file(s) flagged for review.", Color.RED + Color.BOLD))
     else:
         print(c("No flags raised. System looks clean by these heuristics.", Color.YELLOW))
     print(c("\nScan complete.\n", Color.WHITE))

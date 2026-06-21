@@ -928,7 +928,6 @@ def main():
     enable_windows_ansi()
     os.system("")
 
-    print(c("\n HIDAN SCRIPT \n", Color.CYAN + Color.BOLD))
     print_disclaimer()
     print()
 

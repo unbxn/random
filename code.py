@@ -8,7 +8,7 @@ print("""
     ██╔══██║██║██║  ██║██╔══██║██║╚██╗██║
     ██║  ██║██║██████╔╝██║  ██║██║ ╚████║
     ╚═╝  ╚═╝╚═╝╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═══╝
-    By Hidan scripts v1.6 - Full System Scanner
+    By Hidan scripts v1.6
 """)
 print("=" * 70)
 
@@ -278,8 +278,8 @@ def print_downloads_summary():
 def scan_suspicious_full(downloaded_files):
     subheader("FULL SYSTEM SUSPICIOUS FILE SCAN")
     print(c("Scanning all drives thoroughly... This may take a while.", Color.YELLOW))
+    print("")
     print(c("NOTE: Skipping critical system directories for performance.", Color.GRAY))
-    print(c("TIP: Press Ctrl+Up or Page Up to scroll back in CMD", Color.CYAN))
     print()
     
     flags = []
@@ -444,14 +444,10 @@ def main():
 
     header("SUMMARY")
     if flags:
+        print("")
         print(c(f"{len(flags)} file(s) flagged for review.", Color.RED + Color.BOLD))
-        print(c(f"\n💡 TIP: To see all {len(flags)} files again, you can:", Color.CYAN))
-        print(c(f"   1. Press Ctrl+Up Arrow to scroll up in CMD", Color.CYAN))
-        print(c(f"   2. Or right-click the CMD title bar → Properties → Layout", Color.CYAN))
-        print(c(f"      and increase Screen Buffer Size Height to 9999", Color.CYAN))
-        print(c(f"   3. Or use: python script.py | more", Color.CYAN))
-        print(c(f"   4. Or use: python script.py > output.txt  (saves to file)", Color.CYAN))
     else:
+        print("")
         print(c("No flags raised. System looks clean by these heuristics.", Color.GREEN))
     
     print(c("\nFull system scan complete.\n", Color.WHITE))

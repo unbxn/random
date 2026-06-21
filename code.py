@@ -350,7 +350,7 @@ def scan_all_executables():
                     
                     # Get signature status if on Windows
                     sig_status = "Unknown"
-                    if platform.system() == "Windows" and ext in {".exe", ".dll", ".msi"}:
+                    if platform.system() == "Windows" and ext in {".exe", ".msi"}:
                         sig_status = check_signature_windows(filepath)
                     
                     # Format output like the image
@@ -369,13 +369,13 @@ def scan_all_executables():
                     reasons = []
                     
                     # Check if unsigned
-                    if sig_status == "Not signed" and ext in {".exe", ".dll"}:
+                    if sig_status == "Not signed" and ext in {".exe"}:
                         reasons.append("Not signed")
                         flagged = True
                     
                     # Check if in temp directories
                     path_lower = str(filepath).lower()
-                    if "temp" in path_lower and ext in {".exe", ".scr", ".dll"}:
+                    if "temp" in path_lower and ext in {".exe", ".scr"}:
                         reasons.append("In temp directory")
                         flagged = True
                     

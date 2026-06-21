@@ -19,7 +19,6 @@ import subprocess
 import time
 import datetime
 from pathlib import Path
-import psutil  # Requires: pip install psutil
 
 # ----------------------------- Color handling -----------------------------
 
@@ -65,13 +64,11 @@ def subheader(title):
 
 # ----------------------------- Helpers -----------------------------
 
-# Removed .dll from suspicious extensions
 SUSPICIOUS_EXTENSIONS = {".exe", ".scr", ".bat", ".cmd", ".ps1", ".vbs"}
 
-# Heuristic thresholds
 RECENT_DAYS = 14
 MAX_LIST = 250
-MAX_DEPTH = 8  # Increased for thorough scanning
+MAX_DEPTH = 8
 
 
 def human_time(ts):
@@ -100,25 +97,19 @@ def get_all_drives():
     drives = []
     
     if platform.system() == "Windows":
-        # Get all drive letters
         for drive_letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
             drive_path = f"{drive_letter}:\\"
             if os.path.exists(drive_path):
                 try:
-                    # Check if it's a fixed drive or removable
                     import ctypes
                     drive_type = ctypes.windll.kernel32.GetDriveTypeW(drive_path)
-                    # DRIVE_FIXED = 3, DRIVE_REMOVABLE = 2, DRIVE_CDROM = 5
-                    if drive_type in (2, 3):  # Include both fixed and removable
+                    if drive_type in (2, 3):
                         drives.append(Path(drive_path))
-                    elif drive_type == 5:  # CD/DVD drives, skip them
-                        pass
                 except:
-                    # If we can't determine, include it anyway
                     drives.append(Path(drive_path))
     else:
-        # Unix/Linux/Mac - get all mounted filesystems
         try:
+            import psutil
             for partition in psutil.disk_partitions():
                 if partition.fstype and 'tmpfs' not in partition.fstype and 'devtmpfs' not in partition.fstype:
                     try:
@@ -128,33 +119,13 @@ def get_all_drives():
                     except:
                         pass
         except:
-            # Fallback to common mount points
             common_mounts = ["/", "/home", "/mnt", "/media"]
             for mount in common_mounts:
                 p = Path(mount)
                 if p.exists():
                     drives.append(p)
     
-    # Filter out system directories that would cause massive false positives
-    exclude_dirs = []
-    if platform.system() == "Windows":
-        exclude_dirs = ["Windows", "System32", "Program Files", "Program Files (x86)"]
-    else:
-        exclude_dirs = ["sys", "proc", "dev", "run", "snap", "lib", "lib64", "usr", "boot"]
-    
-    return drives, exclude_dirs
-
-
-def should_skip_dir(directory, exclude_dirs):
-    """Check if a directory should be skipped during scanning."""
-    try:
-        dir_path = Path(directory)
-        for exclude in exclude_dirs:
-            if exclude in str(dir_path):
-                return True
-        return False
-    except:
-        return False
+    return drives, []
 
 
 def is_system_directory(path):
@@ -185,7 +156,6 @@ def get_install_date_windows():
                 return line.split(":", 1)[1].strip()
     except Exception:
         pass
-    # Fallback: registry InstallDate via reg query
     try:
         result = subprocess.run(
             ["reg", "query", r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion",
@@ -203,8 +173,6 @@ def get_install_date_windows():
 
 
 def get_install_date_unix():
-    # Best-effort heuristic: filesystem creation time of root, or earliest
-    # timestamp found on key system directories.
     candidates = ["/", "/etc", "/var/log/installer", "/lost+found"]
     earliest = None
     for path in candidates:
@@ -234,7 +202,6 @@ def print_system_info():
 
     print(c(f"Install date:  {install_date}", Color.WHITE))
     
-    # Show drives being scanned
     drives, _ = get_all_drives()
     print(c(f"Drives to scan: {', '.join([str(d) for d in drives])}", Color.GREEN))
 
@@ -274,7 +241,6 @@ def get_downloads_dir():
     home = Path.home()
     candidates = [home / "Downloads"]
     if platform.system() == "Windows":
-        # Also check other common download locations
         candidates.append(home / "Documents" / "Downloads")
         candidates.append(home / "Desktop")
     return [p for p in candidates if p.exists()]
@@ -313,24 +279,23 @@ def scan_suspicious_full(downloaded_files):
     subheader("FULL SYSTEM SUSPICIOUS FILE SCAN")
     print(c("Scanning all drives thoroughly... This may take a while.", Color.YELLOW))
     print(c("NOTE: Skipping critical system directories for performance.", Color.GRAY))
+    print(c("TIP: Press Ctrl+Up or Page Up to scroll back in CMD", Color.CYAN))
+    print()
     
     flags = []
     notices = []
     scanned_count = 0
     
-    # Get all drives and exclude system directories
     drives, exclude_dirs = get_all_drives()
     now = time.time()
     recent_cutoff = now - (RECENT_DAYS * 86400)
     
     seen = set()
     
-    # Scan each drive
     for drive in drives:
         print(c(f"\nScanning drive: {drive}", Color.BLUE))
         drive_str = str(drive).lower()
         
-        # Skip system directories on this drive
         if platform.system() == "Windows":
             if "windows" in drive_str or "system32" in drive_str or "program files" in drive_str:
                 print(c(f"  Skipping system directories on {drive}", Color.GRAY))
@@ -341,11 +306,9 @@ def scan_suspicious_full(downloaded_files):
                 if not f.is_file():
                     continue
                     
-                # Skip if it's a system directory
                 if is_system_directory(f):
                     continue
                     
-                # Skip if we've seen this file before (avoid duplicates)
                 try:
                     key = str(f.resolve()) if f.exists() else str(f)
                     if key in seen:
@@ -354,15 +317,13 @@ def scan_suspicious_full(downloaded_files):
                 except:
                     continue
                 
-                # Check if it's a suspicious extension (removed .dll)
                 ext = f.suffix.lower()
                 if ext not in SUSPICIOUS_EXTENSIONS:
                     continue
                 
                 try:
                     st = f.stat()
-                    # Skip very small files that are likely harmless
-                    if st.st_size < 1024:  # 1KB
+                    if st.st_size < 1024:
                         continue
                 except Exception:
                     continue
@@ -374,11 +335,9 @@ def scan_suspicious_full(downloaded_files):
                 reasons = []
                 path_str = str(f).lower()
                 
-                # Heuristic 1: executable in temp directory
                 if "temp" in path_str and ext in (".exe", ".scr"):
                     reasons.append("Executable located in a temp directory")
                 
-                # Heuristic 2: hidden file
                 is_hidden = f.name.startswith(".")
                 if platform.system() == "Windows":
                     try:
@@ -392,12 +351,10 @@ def scan_suspicious_full(downloaded_files):
                 if is_hidden:
                     reasons.append("File is hidden")
                 
-                # Heuristic 3: recently modified
                 recently_modified = st.st_mtime >= recent_cutoff
                 if recently_modified and ext in (".exe", ".scr"):
                     reasons.append(f"Executable modified within last {RECENT_DAYS} days")
                 
-                # Heuristic 4: double extension trick
                 if f.name.lower().count(".") >= 2 and ext == ".exe":
                     stem_parts = f.name.lower().split(".")
                     if len(stem_parts) >= 3 and stem_parts[-2] in (
@@ -406,16 +363,14 @@ def scan_suspicious_full(downloaded_files):
                     ):
                         reasons.append("Double file extension (disguise pattern)")
                 
-                # Heuristic 5: script files in suspicious locations
                 if ext in (".bat", ".vbs", ".ps1", ".cmd"):
                     if "temp" in path_str:
-                        reasons.append("Script file in temp directory (possible dropper/launcher)")
+                        reasons.append("Script file in temp directory")
                     if "startup" in path_str:
-                        reasons.append("Script in startup folder (auto-launch)")
+                        reasons.append("Script in startup folder")
                     if "downloads" in path_str:
                         reasons.append("Script in downloads folder")
                 
-                # Heuristic 6: Recently created in user directories
                 if platform.system() == "Windows":
                     user_paths = ["users", "user", "documents", "desktop"]
                     if any(p in path_str for p in user_paths) and recently_modified:
@@ -435,14 +390,21 @@ def scan_suspicious_full(downloaded_files):
     if not flags:
         print(c("\nNo suspicious indicators found based on current heuristics.", Color.YELLOW))
     else:
+        # Sort by most recent first
         flags.sort(key=lambda x: x[2], reverse=True)
-        print(c(f"\nFound {len(flags)} flagged files:", Color.RED + Color.BOLD))
-        for f, reasons, mtime, size in flags[:MAX_LIST]:
-            print(c(f"[FLAGGED] {f}", Color.RED + Color.BOLD))
-            print(c(f"          Modified: {human_time(mtime)}  Size: {size/1024:.1f} KB", Color.RED))
+        
+        print(c(f"\n{'='*70}", Color.RED))
+        print(c(f"FOUND {len(flags)} FLAGGED FILES:", Color.RED + Color.BOLD))
+        print(c(f"{'='*70}", Color.RED))
+        print()
+        
+        # Display ALL flagged files with numbering
+        for idx, (f, reasons, mtime, size) in enumerate(flags, 1):
+            print(c(f"[{idx}/{len(flags)}] {c('FLAGGED', Color.RED)} {f}", Color.WHITE + Color.BOLD))
+            print(c(f"          Modified: {human_time(mtime)}  Size: {size/1024:.1f} KB", Color.YELLOW))
             for r in reasons:
-                print(c(f"          -> {r}", Color.RED))
-            print()
+                print(c(f"          ⚠️  {r}", Color.RED))
+            print()  # Empty line between files
 
     print()
     print(c(f"Executable/script files scanned without flags: {len(notices)}", Color.YELLOW))
@@ -469,7 +431,7 @@ def print_disclaimer():
 
 def main():
     enable_windows_ansi()
-    os.system("")  # also helps enable ANSI on some Windows terminals
+    os.system("")
 
     print(c("\n HIDAN SCRIPT FULL SYSTEM SCANNER\n", Color.CYAN + Color.BOLD))
     print_disclaimer()
@@ -483,9 +445,15 @@ def main():
     header("SUMMARY")
     if flags:
         print(c(f"{len(flags)} file(s) flagged for review.", Color.RED + Color.BOLD))
-        print(c("Review the flagged files above and take appropriate action.", Color.YELLOW))
+        print(c(f"\n💡 TIP: To see all {len(flags)} files again, you can:", Color.CYAN))
+        print(c(f"   1. Press Ctrl+Up Arrow to scroll up in CMD", Color.CYAN))
+        print(c(f"   2. Or right-click the CMD title bar → Properties → Layout", Color.CYAN))
+        print(c(f"      and increase Screen Buffer Size Height to 9999", Color.CYAN))
+        print(c(f"   3. Or use: python script.py | more", Color.CYAN))
+        print(c(f"   4. Or use: python script.py > output.txt  (saves to file)", Color.CYAN))
     else:
         print(c("No flags raised. System looks clean by these heuristics.", Color.GREEN))
+    
     print(c("\nFull system scan complete.\n", Color.WHITE))
 
 

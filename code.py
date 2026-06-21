@@ -928,4 +928,46 @@ def main():
     enable_windows_ansi()
     os.system("")
 
-    print(c("\n HIDAN SCRIPT ENHANCED FORENSIC SCANNER
+    print(c("\n HIDAN SCRIPT ENHANCED FORENSIC SCANNER\n", Color.CYAN + Color.BOLD))
+    print_disclaimer()
+    print()
+
+    print_system_info()
+    print_temp_summary()
+    downloaded = print_downloads_summary()
+    
+    # Run all forensic scans
+    prefetch_flags = scan_prefetch()
+    event_flags = scan_event_logs()
+    deleted_traces = scan_deleted_file_traces()
+    file_flags = scan_suspicious_full(downloaded)
+
+    header("FINAL SUMMARY")
+    total_flags = len(prefetch_flags) + len(event_flags) + len(deleted_traces) + len(file_flags)
+    
+    print(c("\nForensic Scan Results:", Color.CYAN + Color.BOLD))
+    print(c(f"  • Prefetch flags:    {len(prefetch_flags)}", Color.WHITE))
+    print(c(f"  • Event log flags:   {len(event_flags)}", Color.WHITE))
+    print(c(f"  • Deleted traces:    {len(deleted_traces)}", Color.WHITE))
+    print(c(f"  • File heuristics:   {len(file_flags)}", Color.WHITE))
+    print(c(f"  • Total flags:       {total_flags}", Color.WHITE + Color.BOLD))
+    
+    if total_flags > 0:
+        print("")
+        print(c("⚠️  REVIEW RECOMMENDED: Investigate flagged items above.", Color.RED + Color.BOLD))
+    else:
+        print("")
+        print(c("✅ No significant flags raised. System appears clean by these heuristics.", Color.GREEN + Color.BOLD))
+    
+    print(c("\nFull forensic scan complete.\n", Color.WHITE))
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(c("\nScan interrupted by user.", Color.YELLOW))
+        sys.exit(1)
+    except Exception as e:
+        print(c(f"\nUnexpected error: {e}", Color.RED))
+        sys.exit(1)

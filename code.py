@@ -878,128 +878,153 @@ def print_downloads_summary():
     return all_files
 
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+
 def scan_suspicious_full(downloaded_files):
     subheader("FULL SYSTEM SUSPICIOUS FILE SCAN")
     print(c("Scanning all drives thoroughly... This may take a while.", Color.YELLOW))
-    print("")
     print(c("NOTE: Skipping critical system directories for performance.", Color.GRAY))
     print()
-    
+
     flags = []
     notices = []
     scanned_count = 0
-    
-    drives, exclude_dirs = get_all_drives()
+    seen = set()
+    seen_lock = threading.Lock()
+    flags_lock = threading.Lock()
+    counter_lock = threading.Lock()
+
+    drives, _ = get_all_drives()
     now = time.time()
     recent_cutoff = now - (RECENT_DAYS * 86400)
-    
-    seen = set()
-    
-    for drive in drives:
-        print(c(f"\nScanning drive: {drive}", Color.BLUE))
-        drive_str = str(drive).lower()
-        
-        if platform.system() == "Windows":
-            if "windows" in drive_str or "system32" in drive_str or "program files" in drive_str:
-                print(c(f"  Skipping system directories on {drive}", Color.GRAY))
-                continue
-        
+
+    # Pre-compile suspicious name check
+    suspicious_user_paths = frozenset(["users", "user", "documents", "desktop"])
+
+    def process_file(f):
+        ext = f.suffix.lower()
+        if ext not in SUSPICIOUS_EXTENSIONS:
+            return None
+
+        path_str = str(f).lower()
+
+        if is_system_directory(f):
+            return None
+
         try:
-            for f in safe_walk(drive, max_depth=MAX_DEPTH):
-                if not f.is_file():
-                    continue
-                    
-                if is_system_directory(f):
-                    continue
-                    
-                try:
-                    key = str(f.resolve()) if f.exists() else str(f)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                except:
-                    continue
-                
-                ext = f.suffix.lower()
-                if ext not in SUSPICIOUS_EXTENSIONS:
-                    continue
-                
-                try:
-                    st = f.stat()
-                    if st.st_size < 1024:
-                        continue
-                except Exception:
-                    continue
-                
-                scanned_count += 1
-                if scanned_count % 1000 == 0:
-                    print(c(f"  Scanned {scanned_count} suspicious files...", Color.GRAY))
-                
-                reasons = []
-                path_str = str(f).lower()
-                
-                if "temp" in path_str and ext in (".exe", ".scr"):
-                    reasons.append("Executable located in a temp directory")
-                
-                is_hidden = f.name.startswith(".")
-                if platform.system() == "Windows":
-                    try:
-                        import ctypes
-                        attrs = ctypes.windll.kernel32.GetFileAttributesW(str(f))
-                        FILE_ATTRIBUTE_HIDDEN = 0x2
-                        if attrs != -1 and attrs & FILE_ATTRIBUTE_HIDDEN:
-                            is_hidden = True
-                    except Exception:
-                        pass
-                if is_hidden:
-                    reasons.append("File is hidden")
-                
-                recently_modified = st.st_mtime >= recent_cutoff
-                if recently_modified and ext in (".exe", ".scr"):
-                    reasons.append(f"Executable modified within last {RECENT_DAYS} days")
-                
-                if f.name.lower().count(".") >= 2 and ext == ".exe":
-                    stem_parts = f.name.lower().split(".")
-                    if len(stem_parts) >= 3 and stem_parts[-2] in (
-                        "pdf", "jpg", "png", "doc", "docx", "txt", "mp3", "mp4",
-                        "zip", "rar", "7z", "avi", "mkv", "mpg", "mpeg"
-                    ):
-                        reasons.append("Double file extension (disguise pattern)")
-                
-                if ext in (".bat", ".vbs", ".ps1", ".cmd"):
-                    if "temp" in path_str:
-                        reasons.append("Script file in temp directory")
-                    if "startup" in path_str:
-                        reasons.append("Script in startup folder")
-                    if "downloads" in path_str:
-                        reasons.append("Script in downloads folder")
-                
-                if platform.system() == "Windows":
-                    user_paths = ["users", "user", "documents", "desktop"]
-                    if any(p in path_str for p in user_paths) and recently_modified:
-                        reasons.append(f"Recently modified in user directory")
-                
-                if reasons:
-                    flags.append((f, reasons, st.st_mtime, st.st_size))
-                elif ext in (".exe", ".scr"):
-                    notices.append(f)
-                    
-        except Exception as e:
-            print(c(f"  Error scanning {drive}: {str(e)[:100]}", Color.GRAY))
-            continue
-    
+            key = os.path.abspath(f)  # faster than f.resolve()
+            with seen_lock:
+                if key in seen:
+                    return None
+                seen.add(key)
+        except:
+            return None
+
+        try:
+            st = f.stat()  # call stat() only once
+            size = st.st_size
+            mtime = st.st_mtime
+        except:
+            return None
+
+        if size < 1024:
+            return None
+
+        reasons = []
+        recently_modified = mtime >= recent_cutoff
+
+        if "temp" in path_str and ext in (".exe", ".scr"):
+            reasons.append("Executable located in a temp directory")
+
+        # Hidden file check (fast path — no ctypes per file)
+        is_hidden = f.name.startswith(".")
+        if not is_hidden and platform.system() == "Windows":
+            try:
+                import ctypes
+                attrs = ctypes.windll.kernel32.GetFileAttributesW(str(f))
+                if attrs != -1 and (attrs & 0x2):
+                    is_hidden = True
+            except:
+                pass
+        if is_hidden:
+            reasons.append("File is hidden")
+
+        if recently_modified and ext in (".exe", ".scr"):
+            reasons.append(f"Executable modified within last {RECENT_DAYS} days")
+
+        # Double extension check
+        if f.name.lower().count(".") >= 2 and ext == ".exe":
+            stem_parts = f.name.lower().split(".")
+            if len(stem_parts) >= 3 and stem_parts[-2] in {
+                "pdf", "jpg", "png", "doc", "docx", "txt",
+                "mp3", "mp4", "zip", "rar", "7z", "avi", "mkv", "mpg", "mpeg"
+            }:
+                reasons.append("Double file extension (disguise pattern)")
+
+        if ext in (".bat", ".vbs", ".ps1", ".cmd"):
+            if "temp" in path_str:
+                reasons.append("Script file in temp directory")
+            if "startup" in path_str:
+                reasons.append("Script in startup folder")
+            if "downloads" in path_str:
+                reasons.append("Script in downloads folder")
+
+        if platform.system() == "Windows":
+            if any(p in path_str for p in suspicious_user_paths) and recently_modified:
+                reasons.append("Recently modified in user directory")
+
+        if reasons:
+            return ("flag", f, reasons, mtime, size)
+        elif ext in (".exe", ".scr"):
+            return ("notice", f)
+        return None
+
+    def scan_drive(drive):
+        local_flags = []
+        local_notices = []
+        local_count = 0
+
+        for f in safe_walk(drive, max_depth=MAX_DEPTH):
+            if not f.is_file():
+                continue
+            result = process_file(f)
+            if result:
+                if result[0] == "flag":
+                    local_flags.append(result[1:])
+                    local_count += 1
+                elif result[0] == "notice":
+                    local_notices.append(result[1])
+                    local_count += 1
+
+        return local_flags, local_notices, local_count
+
+    # Run one thread per drive (drives are usually 1-3, so no over-threading)
+    with ThreadPoolExecutor(max_workers=min(len(drives), 4)) as executor:
+        futures = {executor.submit(scan_drive, drive): drive for drive in drives}
+        for future in as_completed(futures):
+            drive = futures[future]
+            try:
+                local_flags, local_notices, local_count = future.result()
+                with flags_lock:
+                    flags.extend(local_flags)
+                    notices.extend(local_notices)
+                with counter_lock:
+                    scanned_count += local_count
+                print(c(f"  Drive {drive} done — {local_count} files processed", Color.GRAY))
+            except Exception as e:
+                print(c(f"  Error scanning {drive}: {str(e)[:100]}", Color.GRAY))
+
     print(c(f"\nTotal suspicious files scanned: {scanned_count}", Color.CYAN))
-    
+
     if not flags:
         print(c("\nNo suspicious indicators found based on current heuristics.", Color.YELLOW))
     else:
         flags.sort(key=lambda x: x[2], reverse=True)
-        
         print(c(f"\n{'='*70}", Color.RED))
         print(c(f"FOUND {len(flags)} FLAGGED FILES:", Color.RED + Color.BOLD))
         print(c(f"{'='*70}", Color.RED))
         print()
-        
         for idx, (f, reasons, mtime, size) in enumerate(flags, 1):
             print(c(f"[{idx}/{len(flags)}] {c('FLAGGED', Color.RED)} {f}", Color.WHITE + Color.BOLD))
             print(c(f"          Modified: {human_time(mtime)}  Size: {size/1024:.1f} KB", Color.YELLOW))
@@ -1007,9 +1032,8 @@ def scan_suspicious_full(downloaded_files):
                 print(c(f"          ⚠️  {r}", Color.RED))
             print()
 
-    print()
     print(c(f"Executable/script files scanned without flags: {len(notices)}", Color.YELLOW))
-    if notices and len(notices) > 0:
+    if notices:
         print(c("Sample (up to 10):", Color.YELLOW))
         for f in notices[:10]:
             print(c(f"  {f.name}", Color.YELLOW))
